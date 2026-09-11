@@ -1,0 +1,7 @@
+{
+  "name": "AppAnimador",
+  "description": "Criação automatizada de vídeos animando imagens estáticas com efeitos de câmera e processamento em segundo plano",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
