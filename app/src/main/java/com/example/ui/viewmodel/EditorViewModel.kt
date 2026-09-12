@@ -2,23 +2,29 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
+import com.example.data.local.AppPreferences
 import com.example.data.model.MovementEffect
 import com.example.data.model.Project
 import com.example.data.model.ProjectImage
+import com.example.data.model.TransitionEffect
+import com.example.data.model.VideoAspectRatio
 import com.example.data.model.VideoBitratePreset
 import com.example.data.model.VideoFps
 import com.example.data.model.VideoResolution
 import com.example.data.repository.ProjectRepository
 import com.example.engine.ImageImportHelper
 import com.example.engine.ImageImportResult
+import com.example.engine.RandomPromptResult
 import com.example.engine.RenderingManager
 import com.example.engine.RenderingState
 import com.example.engine.SyntaxParseResult
 import com.example.engine.SyntaxParser
+import com.example.engine.TransitionValidationResult
 import com.example.engine.ZipExtractResult
 import com.example.engine.ZipExtractor
 import com.example.service.VideoRenderingService
@@ -31,6 +37,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -38,6 +45,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         AppDatabase.getInstance(application).projectDao(),
         application
     )
+
+    private val appPreferences: AppPreferences = AppPreferences.getInstance(application)
 
     private var currentProjectId: Long = -1L
 
@@ -47,6 +56,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _images = MutableStateFlow<List<ProjectImage>>(emptyList())
     val images: StateFlow<List<ProjectImage>> = _images.asStateFlow()
 
+    // Navegação de imagem para o palco
+    private val _currentImageIndex = MutableStateFlow(0)
+    val currentImageIndex: StateFlow<Int> = _currentImageIndex.asStateFlow()
+
     private val _selectedMovement = MutableStateFlow(MovementEffect.ALL_EFFECTS[1]) // Pan Left default
     val selectedMovement: StateFlow<MovementEffect> = _selectedMovement.asStateFlow()
 
@@ -54,11 +67,27 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedResolution = MutableStateFlow(VideoResolution.DEFAULT)
     val selectedResolution: StateFlow<VideoResolution> = _selectedResolution.asStateFlow()
 
+    private val _selectedAspectRatio = MutableStateFlow(VideoAspectRatio.RATIO_16_9)
+    val selectedAspectRatio: StateFlow<VideoAspectRatio> = _selectedAspectRatio.asStateFlow()
+
     private val _selectedFps = MutableStateFlow(VideoFps.DEFAULT.fps)
     val selectedFps: StateFlow<Int> = _selectedFps.asStateFlow()
 
     private val _selectedBitrateMbps = MutableStateFlow(VideoBitratePreset.DEFAULT.mbps)
     val selectedBitrateMbps: StateFlow<Float> = _selectedBitrateMbps.asStateFlow()
+
+    // Transições Suaves CapCut (Requisito 2 e 3)
+    private val _selectedTransition = MutableStateFlow(TransitionEffect.DEFAULT)
+    val selectedTransition: StateFlow<TransitionEffect> = _selectedTransition.asStateFlow()
+
+    private val _transitionIdsText = MutableStateFlow("1")
+    val transitionIdsText: StateFlow<String> = _transitionIdsText.asStateFlow()
+
+    private val _transitionError = MutableStateFlow<String?>(null)
+    val transitionError: StateFlow<String?> = _transitionError.asStateFlow()
+
+    private val _isPreviewingTransition = MutableStateFlow(false)
+    val isPreviewingTransition: StateFlow<Boolean> = _isPreviewingTransition.asStateFlow()
 
     private val _syntaxText = MutableStateFlow("")
     val syntaxText: StateFlow<String> = _syntaxText.asStateFlow()
@@ -96,6 +125,24 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             repository.getImages(projectId).collect { imgList ->
                 _images.value = imgList
+                // Ajusta o índice da imagem exibida se necessário
+                if (_currentImageIndex.value >= imgList.size) {
+                    _currentImageIndex.value = (imgList.size - 1).coerceAtLeast(0)
+                }
+                // Detecta a proporção da primeira imagem como padrão inicial (Requisito 5)
+                if (imgList.isNotEmpty()) {
+                    try {
+                        val firstFile = File(imgList[0].filePath)
+                        if (firstFile.exists()) {
+                            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(firstFile.absolutePath, opts)
+                            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                                val detected = VideoAspectRatio.detectFromDimensions(opts.outWidth, opts.outHeight)
+                                _selectedAspectRatio.value = detected
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
                 // Se o texto de sintaxe estiver vazio, inicializa com template automático
                 if (_syntaxText.value.isBlank() && imgList.isNotEmpty()) {
                     val defaultText = SyntaxParser.generateDefaultSyntax(imgList.size, _selectedMovement.value.id)
@@ -108,11 +155,16 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectMovement(effect: MovementEffect) {
         _selectedMovement.value = effect
+        _isPreviewingTransition.value = false
         _isTestPlaying.value = true
     }
 
     fun selectResolution(resolution: VideoResolution) {
         _selectedResolution.value = resolution
+    }
+
+    fun selectAspectRatio(aspectRatio: VideoAspectRatio) {
+        _selectedAspectRatio.value = aspectRatio
     }
 
     fun selectFps(fps: Int) {
@@ -125,6 +177,69 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setBitrateMbps(mbps: Float) {
         _selectedBitrateMbps.value = (Math.round(mbps * 10f) / 10f).coerceIn(0.5f, 20.0f)
+    }
+
+    fun selectTransition(transition: TransitionEffect) {
+        _selectedTransition.value = transition
+        _transitionIdsText.value = transition.id.toString()
+        _transitionError.value = null
+        _isPreviewingTransition.value = true
+        _isTestPlaying.value = true
+    }
+
+    fun updateTransitionIdsText(newText: String) {
+        _transitionIdsText.value = newText
+        when (val result = SyntaxParser.validateTransitionIds(newText)) {
+            is TransitionValidationResult.Success -> {
+                _transitionError.value = null
+                val firstId = result.transitionIds.firstOrNull() ?: 1
+                _selectedTransition.value = TransitionEffect.getOrCut(firstId)
+            }
+            is TransitionValidationResult.Error -> {
+                _transitionError.value = result.message
+            }
+        }
+    }
+
+    fun togglePreviewMode() {
+        _isPreviewingTransition.value = !_isPreviewingTransition.value
+    }
+
+    fun previousImage() {
+        if (_currentImageIndex.value > 0) {
+            _currentImageIndex.value -= 1
+        }
+    }
+
+    fun nextImage() {
+        if (_currentImageIndex.value < _images.value.size - 1) {
+            _currentImageIndex.value += 1
+        }
+    }
+
+    fun setImageIndex(index: Int) {
+        _currentImageIndex.value = index.coerceIn(0, (_images.value.size - 1).coerceAtLeast(0))
+    }
+
+    fun generateAutomaticPrompts() {
+        val count = _images.value.size
+        if (count == 0) {
+            viewModelScope.launch {
+                _messageEvents.emit("Importe fotos antes de gerar os prompts automáticos.")
+            }
+            return
+        }
+
+        val result = SyntaxParser.generateRandomPrompts(count)
+        _syntaxText.value = result.movementSyntaxText
+        _transitionIdsText.value = result.transitionIdsText
+        _syntaxError.value = null
+        _transitionError.value = null
+
+        viewModelScope.launch {
+            repository.updateProjectSyntax(currentProjectId, result.movementSyntaxText)
+            _messageEvents.emit("Prompts automáticos gerados com movimentos (0-10), durações (5-10s) e transições (0-20)!")
+        }
     }
 
     fun toggleTestPlaying() {
@@ -242,8 +357,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun updateCustomOutputDir(uriString: String?) {
         viewModelScope.launch {
             repository.updateCustomOutputDir(currentProjectId, uriString)
+            appPreferences.setDefaultOutputDirUri(uriString)
             _messageEvents.emit(
-                if (uriString != null) "Pasta de destino personalizada definida."
+                if (uriString != null) "Pasta de destino personalizada definida e salva como padrão para projetos futuros."
                 else "Diretório padrão (/Movies/AppAnimador/) redefinido."
             )
         }
@@ -274,26 +390,44 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
+        // Valida as IDs de transições
+        val transValidation = SyntaxParser.validateTransitionIds(_transitionIdsText.value)
+        val transitionIds = when (transValidation) {
+            is TransitionValidationResult.Success -> transValidation.transitionIds
+            is TransitionValidationResult.Error -> {
+                _transitionError.value = transValidation.message
+                viewModelScope.launch {
+                    _messageEvents.emit("Aviso: Transição inválida (${transValidation.message}). Usando padrão ID 1.")
+                }
+                listOf(1)
+            }
+        }
+
         val configs = (parseResult as SyntaxParseResult.Success).configs
 
         val resolution = _selectedResolution.value
+        val aspectRatio = _selectedAspectRatio.value
+        val (finalWidth, finalHeight) = aspectRatio.calculateDimensions(resolution)
         val fps = _selectedFps.value
         val bitrateBps = (_selectedBitrateMbps.value * 1_000_000).toInt()
 
         // Abre o modal de progresso
         _isProgressModalOpen.value = true
 
-        // Dispara Foreground Service com parâmetros rigorosamente configurados
+        val effectiveDir = _project.value?.customOutputDirUri ?: appPreferences.getDefaultOutputDirUri()
+
+        // Dispara Foreground Service com parâmetros rigorosamente configurados para exportação unificada
         VideoRenderingService.start(
             context = context,
             projectId = currentProjectId,
             configs = configs,
-            customDirUri = _project.value?.customOutputDirUri,
-            videoWidth = resolution.width,
-            videoHeight = resolution.height,
+            customDirUri = effectiveDir,
+            videoWidth = finalWidth,
+            videoHeight = finalHeight,
             videoFps = fps,
             videoBitrateBps = bitrateBps,
-            resolutionLabel = resolution.label
+            resolutionLabel = "${resolution.label} • ${aspectRatio.label} (${finalWidth}x${finalHeight})",
+            transitionIds = transitionIds
         )
     }
 

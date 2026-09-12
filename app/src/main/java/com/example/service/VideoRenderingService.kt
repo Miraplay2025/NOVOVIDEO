@@ -19,8 +19,11 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.MainActivity
 import com.example.R
 import com.example.data.db.AppDatabase
+import com.example.data.local.AppPreferences
 import com.example.data.model.MovementEffect
 import com.example.data.model.ParsedAnimationConfig
+import com.example.data.model.TransitionEffect
+import com.example.engine.RenderSequenceItem
 import com.example.engine.RenderingManager
 import com.example.engine.VideoEncoder
 import kotlinx.coroutines.CoroutineScope
@@ -67,18 +70,20 @@ class VideoRenderingService : Service() {
         val videoFps = intent.getIntExtra(EXTRA_VIDEO_FPS, 30)
         val videoBitrate = intent.getIntExtra(EXTRA_VIDEO_BITRATE, 5_000_000)
         val resolutionLabel = intent.getStringExtra(EXTRA_RESOLUTION_LABEL) ?: "${videoWidth}x${videoHeight}"
+        val transitionIds = intent.getIntegerArrayListExtra(EXTRA_TRANSITION_IDS) ?: arrayListOf(1)
 
         if (projectId == -1L || configs.isNullOrEmpty()) {
             stopSelf()
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification("Iniciando renderização...", 0, configs.size, 0))
+        startForeground(NOTIFICATION_ID, buildNotification("Iniciando renderização de vídeo unificado...", 0, configs.size, 0))
 
         serviceScope.launch {
             processBatch(
                 projectId = projectId,
                 configs = configs,
+                transitionIds = transitionIds,
                 customOutputDirUri = customOutputDirUri,
                 videoWidth = videoWidth,
                 videoHeight = videoHeight,
@@ -94,6 +99,7 @@ class VideoRenderingService : Service() {
     private suspend fun processBatch(
         projectId: Long,
         configs: List<RenderConfigParcel>,
+        transitionIds: List<Int>,
         customOutputDirUri: String?,
         videoWidth: Int,
         videoHeight: Int,
@@ -105,106 +111,114 @@ class VideoRenderingService : Service() {
         RenderingManager.startBatch(totalImages)
 
         val bitrateFormatted = String.format(java.util.Locale.US, "%.1f Mbps", videoBitrate / 1_000_000f)
-        RenderingManager.log("Configurações de Saída: $resolutionLabel | $videoFps FPS | $bitrateFormatted")
+        RenderingManager.log("Iniciando Exportação de Vídeo Único: $resolutionLabel | $videoFps FPS | $bitrateFormatted")
+        if (transitionIds.isNotEmpty()) {
+            RenderingManager.log("Transições configuradas: [${transitionIds.joinToString(", ")}]")
+        }
 
         val db = AppDatabase.getInstance(applicationContext)
         val images = db.projectDao().getImagesForProjectSync(projectId)
         val imagesByOrder = images.associateBy { it.orderIndex }
 
-        // Diretório padrão conforme requisito 7: /Movies/AppAnimador/
-        val moviesPublicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-        val defaultOutputDir = File(moviesPublicDir, "AppAnimador").apply { mkdirs() }
+        // Diretório padrão conforme requisito 7: /Movies/AppAnimador/ ou preferência persistida
+        val effectiveOutputDirUri = customOutputDirUri ?: AppPreferences.getInstance(applicationContext).getDefaultOutputDirUri()
+        val defaultOutputDir = AppPreferences.getInstance(applicationContext).ensureDefaultDirectory()
 
-        var completedCount = 0
-
+        // Constrói os itens da sequência completa de vídeo unificado
+        val sequenceItems = mutableListOf<RenderSequenceItem>()
         for ((index, item) in configs.withIndex()) {
-            if (RenderingManager.isCancelRequested) {
-                RenderingManager.log("Renderização cancelada pelo usuário.")
-                break
-            }
-
-            val currentImgNum = item.imageIndex
-            val effect = MovementEffect.findById(item.movementId) ?: MovementEffect.ALL_EFFECTS[0]
-            val durationSec = item.durationSeconds
-
-            val projectImage = imagesByOrder[currentImgNum]
+            val projectImage = imagesByOrder[item.imageIndex]
             if (projectImage == null) {
-                RenderingManager.log("Erro: Arquivo de imagem para IMAGEM $currentImgNum não foi localizado.")
+                RenderingManager.log("Aviso: Imagem #${item.imageIndex} não encontrada no banco.")
                 continue
             }
 
             val imageFile = File(projectImage.filePath)
             if (!imageFile.exists()) {
-                RenderingManager.log("Erro: Arquivo físico não encontrado em ${imageFile.absolutePath}")
+                RenderingManager.log("Aviso: Arquivo físico não encontrado em ${imageFile.absolutePath}")
                 continue
             }
 
-            val effectLogName = "${effect.name}, ${String.format(java.util.Locale.US, "%.1fs", durationSec)}"
-            RenderingManager.log("Renderizando IMAGEM $currentImgNum ($effectLogName)...")
-
-            val overallPercent = ((index.toFloat() / totalImages) * 100).toInt()
-            updateNotification(
-                "Processando imagem ${index + 1} de $totalImages",
-                index + 1,
-                totalImages,
-                overallPercent
-            )
-            RenderingManager.updateProgress(
-                currentImageIndex = index + 1,
-                totalImages = totalImages,
-                currentMovementName = effect.name,
-                overallPercent = overallPercent
-            )
-
-            // Arquivo temporário de saída
-            val tempOutputFile = File(cacheDir, "vid_render_${System.currentTimeMillis()}_${item.imageIndex}.mp4")
-
-            val success = VideoEncoder.encodeImageToVideo(
-                imageFile = imageFile,
-                movementEffect = effect,
-                durationSeconds = durationSec,
-                outputFile = tempOutputFile,
-                targetWidth = videoWidth,
-                targetHeight = videoHeight,
-                frameRate = videoFps,
-                bitRate = videoBitrate,
-                onFrameProgress = { currentFrame, totalFrames ->
-                    val framePercent = ((index + (currentFrame.toFloat() / totalFrames)) / totalImages * 100).toInt()
-                    RenderingManager.updateProgress(
-                        currentImageIndex = index + 1,
-                        totalImages = totalImages,
-                        currentMovementName = effect.name,
-                        overallPercent = framePercent
-                    )
-                },
-                isCancelled = { RenderingManager.isCancelRequested }
-            )
-
-            if (success && tempOutputFile.exists() && tempOutputFile.length() > 0) {
-                // Salva no destino conforme especificação
-                val savedLocation = saveVideoToDestination(
-                    tempFile = tempOutputFile,
-                    fileName = "vid_${item.imageIndex}.mp4",
-                    customOutputDirUri = customOutputDirUri,
-                    defaultDir = defaultOutputDir
-                )
-
-                completedCount++
-                RenderingManager.addOutputFile(savedLocation)
-                RenderingManager.log("IMAGEM $currentImgNum salva com sucesso em $savedLocation ($resolutionLabel @ ${videoFps}fps)")
-                tempOutputFile.delete()
+            val effect = MovementEffect.findById(item.movementId) ?: MovementEffect.ALL_EFFECTS[0]
+            val transId = if (transitionIds.isNotEmpty()) {
+                transitionIds[index % transitionIds.size]
             } else {
-                if (RenderingManager.isCancelRequested) {
-                    RenderingManager.log("Processo interrompido na IMAGEM $currentImgNum.")
-                } else {
-                    RenderingManager.log("Falha ao renderizar IMAGEM $currentImgNum.")
-                }
-                tempOutputFile.delete()
+                1
             }
+            val transEffect = TransitionEffect.getOrCut(transId)
+
+            sequenceItems.add(
+                RenderSequenceItem(
+                    imageFile = imageFile,
+                    movementEffect = effect,
+                    durationSeconds = item.durationSeconds,
+                    transitionToNext = transEffect
+                )
+            )
+        }
+
+        if (sequenceItems.isEmpty()) {
+            RenderingManager.log("Nenhuma imagem válida encontrada para gerar o vídeo.")
+            RenderingManager.completeBatch()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
+        RenderingManager.log("Processando sequência de ${sequenceItems.size} cenas em um único arquivo de vídeo...")
+
+        val tempOutputFile = File(cacheDir, "video_unificado_${System.currentTimeMillis()}.mp4")
+
+        val success = VideoEncoder.encodeUnifiedSequenceToVideo(
+            sequence = sequenceItems,
+            outputFile = tempOutputFile,
+            targetWidth = videoWidth,
+            targetHeight = videoHeight,
+            frameRate = videoFps,
+            bitRate = videoBitrate,
+            transitionDurationSeconds = 1.0f,
+            onGlobalProgress = { currentFrame, totalFrames, currentImgIndex, statusText ->
+                val overallPercent = ((currentFrame.toFloat() / totalFrames) * 100).toInt().coerceIn(0, 100)
+                updateNotification(
+                    "Exportando vídeo único ($overallPercent%)",
+                    currentImgIndex + 1,
+                    sequenceItems.size,
+                    overallPercent
+                )
+                RenderingManager.updateProgress(
+                    currentImageIndex = currentImgIndex + 1,
+                    totalImages = sequenceItems.size,
+                    currentMovementName = statusText,
+                    overallPercent = overallPercent
+                )
+            },
+            isCancelled = { RenderingManager.isCancelRequested }
+        )
+
+        if (success && tempOutputFile.exists() && tempOutputFile.length() > 0) {
+            val fileName = "video_completo_animado_${System.currentTimeMillis()}.mp4"
+            val savedLocation = saveVideoToDestination(
+                tempFile = tempOutputFile,
+                fileName = fileName,
+                customOutputDirUri = effectiveOutputDirUri,
+                defaultDir = defaultOutputDir
+            )
+
+            RenderingManager.addOutputFile(savedLocation)
+            RenderingManager.log("VÍDEO ÚNICO FINAL gerado com sucesso!")
+            RenderingManager.log("Salvo em: $savedLocation")
+            tempOutputFile.delete()
+        } else {
+            if (RenderingManager.isCancelRequested) {
+                RenderingManager.log("Renderização cancelada pelo usuário.")
+            } else {
+                RenderingManager.log("Falha na renderização do vídeo único.")
+            }
+            tempOutputFile.delete()
         }
 
         if (RenderingManager.isCancelRequested) {
-            updateNotification("Renderização cancelada", completedCount, totalImages, 100)
+            updateNotification("Renderização cancelada", 0, totalImages, 100)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
@@ -217,7 +231,7 @@ class VideoRenderingService : Service() {
         }
 
         RenderingManager.completeBatch()
-        updateNotification("Processamento de $completedCount vídeos concluído!", totalImages, totalImages, 100)
+        updateNotification("Vídeo final renderizado e salvo com sucesso!", totalImages, totalImages, 100)
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
     }
@@ -372,6 +386,7 @@ class VideoRenderingService : Service() {
         const val EXTRA_VIDEO_FPS = "extra_video_fps"
         const val EXTRA_VIDEO_BITRATE = "extra_video_bitrate"
         const val EXTRA_RESOLUTION_LABEL = "extra_resolution_label"
+        const val EXTRA_TRANSITION_IDS = "extra_transition_ids"
 
         fun start(
             context: Context,
@@ -382,7 +397,8 @@ class VideoRenderingService : Service() {
             videoHeight: Int = 720,
             videoFps: Int = 30,
             videoBitrateBps: Int = 5_000_000,
-            resolutionLabel: String = "720p (1280x720) [HD]"
+            resolutionLabel: String = "720p (1280x720) [HD]",
+            transitionIds: List<Int> = listOf(1)
         ) {
             val parcelList = ArrayList(configs.map {
                 RenderConfigParcel(it.imageIndex, it.movementId, it.durationSeconds)
@@ -391,6 +407,7 @@ class VideoRenderingService : Service() {
                 action = ACTION_START
                 putExtra(EXTRA_PROJECT_ID, projectId)
                 putParcelableArrayListExtra(EXTRA_CONFIGS, parcelList)
+                putIntegerArrayListExtra(EXTRA_TRANSITION_IDS, ArrayList(transitionIds))
                 putExtra(EXTRA_CUSTOM_DIR_URI, customDirUri)
                 putExtra(EXTRA_VIDEO_WIDTH, videoWidth)
                 putExtra(EXTRA_VIDEO_HEIGHT, videoHeight)

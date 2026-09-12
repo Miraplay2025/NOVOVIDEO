@@ -13,10 +13,18 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import com.example.data.model.MovementEffect
+import com.example.data.model.TransitionEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
+
+data class RenderSequenceItem(
+    val imageFile: File,
+    val movementEffect: MovementEffect,
+    val durationSeconds: Float,
+    val transitionToNext: TransitionEffect = TransitionEffect.DEFAULT
+)
 
 object VideoEncoder {
 
@@ -24,6 +32,296 @@ object VideoEncoder {
     private const val DEFAULT_FRAME_RATE = 30
     private const val I_FRAME_INTERVAL = 1
     private const val DEFAULT_BIT_RATE = 5_000_000 // 5.0 Mbps
+
+    /**
+     * Renderização de Vídeo Único (Exportação Unificada):
+     * Processa a sequência completa de imagens e exporta um ÚNICO VÍDEO COMPLETO final,
+     * unindo todas as imagens com suas durações, movimentos de câmera e transições suaves,
+     * emitindo o progresso global de 0% a 100%.
+     */
+    suspend fun encodeUnifiedSequenceToVideo(
+        sequence: List<RenderSequenceItem>,
+        outputFile: File,
+        targetWidth: Int = 1280,
+        targetHeight: Int = 720,
+        frameRate: Int = DEFAULT_FRAME_RATE,
+        bitRate: Int = DEFAULT_BIT_RATE,
+        transitionDurationSeconds: Float = 1.0f,
+        onGlobalProgress: (currentFrame: Int, totalFrames: Int, currentImageIndex: Int, statusText: String) -> Unit = { _, _, _, _ -> },
+        isCancelled: () -> Boolean = { false }
+    ): Boolean = withContext(Dispatchers.Default) {
+        if (sequence.isEmpty()) return@withContext false
+
+        // 1. Calcula frames por imagem e o total global de frames
+        val itemFrames = sequence.map { (it.durationSeconds * frameRate).toInt().coerceAtLeast(frameRate) }
+        val totalGlobalFrames = itemFrames.sum().coerceAtLeast(1)
+
+        outputFile.parentFile?.mkdirs()
+        if (outputFile.exists()) {
+            outputFile.delete()
+        }
+
+        var encoder: MediaCodec? = null
+        var muxer: MediaMuxer? = null
+
+        var currentBitmap: Bitmap? = null
+        var nextBitmap: Bitmap? = null
+
+        try {
+            val colorFormat = selectColorFormat()
+            val format = MediaFormat.createVideoFormat(MIME_TYPE, targetWidth, targetHeight).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL)
+            }
+
+            encoder = MediaCodec.createEncoderByType(MIME_TYPE)
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder.start()
+
+            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            var videoTrackIndex = -1
+            var muxerStarted = false
+
+            val bufferInfo = MediaCodec.BufferInfo()
+            val frameBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(frameBitmap)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+            val matrixCurrent = Matrix()
+            val matrixNext = Matrix()
+
+            val argbArray = IntArray(targetWidth * targetHeight)
+            val yuvArray = ByteArray(targetWidth * targetHeight * 3 / 2)
+
+            var globalFrameIndex = 0
+
+            // Helper para drenar buffers do encoder
+            fun drainEncoder(endOfStream: Boolean) {
+                var drainAttempts = 0
+                while (drainAttempts < (if (endOfStream) 100 else 1)) {
+                    val outIndex = encoder.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000 else 0)
+                    if (outIndex >= 0) {
+                        val encodedBuffer = encoder.getOutputBuffer(outIndex)
+                        if (bufferInfo.size != 0 && muxerStarted && encodedBuffer != null) {
+                            encodedBuffer.position(bufferInfo.offset)
+                            encodedBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(videoTrackIndex, encodedBuffer, bufferInfo)
+                        }
+                        encoder.releaseOutputBuffer(outIndex, false)
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            break
+                        }
+                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && !muxerStarted) {
+                        val newFormat = encoder.outputFormat
+                        videoTrackIndex = muxer.addTrack(newFormat)
+                        muxer.start()
+                        muxerStarted = true
+                    } else {
+                        if (endOfStream) drainAttempts++ else break
+                    }
+                }
+            }
+
+            // Helper para enviar um frame YUV ao encoder
+            fun queueCurrentFrame(isLastFrame: Boolean): Boolean {
+                frameBitmap.getPixels(argbArray, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+                if (colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar) {
+                    convertArgbToYuv420Planar(argbArray, yuvArray, targetWidth, targetHeight)
+                } else {
+                    convertArgbToYuv420SemiPlanar(argbArray, yuvArray, targetWidth, targetHeight)
+                }
+
+                var queued = false
+                var attempts = 0
+                while (!queued && attempts < 60) {
+                    if (isCancelled()) return false
+                    val inIndex = encoder.dequeueInputBuffer(10_000)
+                    if (inIndex >= 0) {
+                        val inBuffer = encoder.getInputBuffer(inIndex)
+                        inBuffer?.clear()
+                        inBuffer?.put(yuvArray)
+
+                        val ptsUs = (globalFrameIndex * 1_000_000L) / frameRate
+                        val flags = if (isLastFrame) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+
+                        encoder.queueInputBuffer(
+                            inIndex,
+                            0,
+                            yuvArray.size,
+                            ptsUs,
+                            flags
+                        )
+                        queued = true
+                    } else {
+                        drainEncoder(false)
+                        attempts++
+                    }
+                }
+                drainEncoder(false)
+                return queued
+            }
+
+            // Loop principal da sequência unificada
+            for (i in sequence.indices) {
+                if (isCancelled()) {
+                    cleanup(encoder, muxer, muxerStarted)
+                    currentBitmap?.recycle()
+                    nextBitmap?.recycle()
+                    frameBitmap.recycle()
+                    outputFile.delete()
+                    return@withContext false
+                }
+
+                val item = sequence[i]
+                if (currentBitmap == null || currentBitmap.isRecycled) {
+                    currentBitmap = loadOptimizedBitmap(item.imageFile, targetWidth * 2, targetHeight * 2)
+                        ?: return@withContext false
+                }
+
+                val hasNext = i < sequence.size - 1
+                if (hasNext && (nextBitmap == null || nextBitmap.isRecycled)) {
+                    nextBitmap = loadOptimizedBitmap(sequence[i + 1].imageFile, targetWidth * 2, targetHeight * 2)
+                }
+
+                val totalItemFrames = itemFrames[i]
+                val transitionEffect = item.transitionToNext
+                val transitionFrames = if (hasNext && nextBitmap != null && transitionEffect.id != 0) {
+                    (transitionDurationSeconds * frameRate).toInt().coerceIn(1, totalItemFrames / 2)
+                } else {
+                    0
+                }
+                val pureCameraFrames = totalItemFrames - transitionFrames
+
+                // Fase 1: Movimento de câmera puro da imagem atual
+                for (f in 0 until pureCameraFrames) {
+                    if (isCancelled()) {
+                        cleanup(encoder, muxer, muxerStarted)
+                        currentBitmap.recycle()
+                        nextBitmap?.recycle()
+                        frameBitmap.recycle()
+                        outputFile.delete()
+                        return@withContext false
+                    }
+
+                    val progress = f.toFloat() / (totalItemFrames - 1).coerceAtLeast(1)
+                    canvas.drawColor(Color.BLACK)
+                    item.movementEffect.applyToMatrix(
+                        matrix = matrixCurrent,
+                        progress = progress,
+                        canvasW = targetWidth.toFloat(),
+                        canvasH = targetHeight.toFloat(),
+                        bitmapW = currentBitmap.width.toFloat(),
+                        bitmapH = currentBitmap.height.toFloat()
+                    )
+                    paint.alpha = 255
+                    canvas.drawBitmap(currentBitmap, matrixCurrent, paint)
+
+                    val isVeryLastFrame = (i == sequence.size - 1) && (f == pureCameraFrames - 1)
+                    if (!queueCurrentFrame(isVeryLastFrame)) {
+                        cleanup(encoder, muxer, muxerStarted)
+                        return@withContext false
+                    }
+
+                    globalFrameIndex++
+                    onGlobalProgress(
+                        globalFrameIndex,
+                        totalGlobalFrames,
+                        i,
+                        "Renderizando Cena ${i + 1}/${sequence.size}: ${item.movementEffect.name}"
+                    )
+                }
+
+                // Fase 2: Transição suave entre a imagem atual e a próxima imagem
+                if (transitionFrames > 0 && nextBitmap != null) {
+                    for (tf in 0 until transitionFrames) {
+                        if (isCancelled()) {
+                            cleanup(encoder, muxer, muxerStarted)
+                            currentBitmap.recycle()
+                            nextBitmap.recycle()
+                            frameBitmap.recycle()
+                            outputFile.delete()
+                            return@withContext false
+                        }
+
+                        val transProgress = tf.toFloat() / (transitionFrames - 1).coerceAtLeast(1)
+                        val currCamProgress = (pureCameraFrames + tf).toFloat() / (totalItemFrames - 1).coerceAtLeast(1)
+                        val nextCamProgress = tf.toFloat() / (itemFrames[i + 1] - 1).coerceAtLeast(1)
+
+                        canvas.drawColor(Color.BLACK)
+                        item.movementEffect.applyToMatrix(
+                            matrix = matrixCurrent,
+                            progress = currCamProgress,
+                            canvasW = targetWidth.toFloat(),
+                            canvasH = targetHeight.toFloat(),
+                            bitmapW = currentBitmap.width.toFloat(),
+                            bitmapH = currentBitmap.height.toFloat()
+                        )
+
+                        sequence[i + 1].movementEffect.applyToMatrix(
+                            matrix = matrixNext,
+                            progress = nextCamProgress,
+                            canvasW = targetWidth.toFloat(),
+                            canvasH = targetHeight.toFloat(),
+                            bitmapW = nextBitmap.width.toFloat(),
+                            bitmapH = nextBitmap.height.toFloat()
+                        )
+
+                        transitionEffect.applyToCanvas(
+                            progress = transProgress,
+                            canvas = canvas,
+                            paint = paint,
+                            bitmap1 = currentBitmap,
+                            matrix1 = matrixCurrent,
+                            bitmap2 = nextBitmap,
+                            matrix2 = matrixNext,
+                            width = targetWidth.toFloat(),
+                            height = targetHeight.toFloat()
+                        )
+
+                        val isVeryLastFrame = (i == sequence.size - 1) && (tf == transitionFrames - 1)
+                        if (!queueCurrentFrame(isVeryLastFrame)) {
+                            cleanup(encoder, muxer, muxerStarted)
+                            return@withContext false
+                        }
+
+                        globalFrameIndex++
+                        onGlobalProgress(
+                            globalFrameIndex,
+                            totalGlobalFrames,
+                            i,
+                            "Transição [${transitionEffect.id}] ${transitionEffect.name} (${i + 1} ➔ ${i + 2})"
+                        )
+                    }
+                }
+
+                // Prepara a próxima iteração: avança os bitmaps
+                if (hasNext && nextBitmap != null) {
+                    currentBitmap.recycle()
+                    currentBitmap = nextBitmap
+                    nextBitmap = null
+                }
+            }
+
+            // Drena todos os buffers finais
+            drainEncoder(true)
+
+            cleanup(encoder, muxer, muxerStarted)
+            currentBitmap?.recycle()
+            nextBitmap?.recycle()
+            frameBitmap.recycle()
+            return@withContext true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            cleanup(encoder, muxer, false)
+            currentBitmap?.recycle()
+            nextBitmap?.recycle()
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+            return@withContext false
+        }
+    }
 
     suspend fun encodeImageToVideo(
         imageFile: File,

@@ -26,13 +26,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -64,6 +71,8 @@ import com.example.ui.components.LivePreviewStage
 import com.example.ui.components.MovementsCarousel
 import com.example.ui.components.ProgressLogModal
 import com.example.ui.components.SyntaxConfigDialog
+import com.example.ui.components.TransitionInputSection
+import com.example.ui.components.TransitionsCarousel
 import com.example.ui.components.VideoOutputSettingsCard
 import com.example.ui.viewmodel.EditorViewModel
 import kotlinx.coroutines.launch
@@ -91,7 +100,13 @@ fun EditorScreen(
 
     val project by viewModel.project.collectAsStateWithLifecycle()
     val images by viewModel.images.collectAsStateWithLifecycle()
+    val currentImageIndex by viewModel.currentImageIndex.collectAsStateWithLifecycle()
     val selectedMovement by viewModel.selectedMovement.collectAsStateWithLifecycle()
+    val selectedAspectRatio by viewModel.selectedAspectRatio.collectAsStateWithLifecycle()
+    val selectedTransition by viewModel.selectedTransition.collectAsStateWithLifecycle()
+    val transitionIdsText by viewModel.transitionIdsText.collectAsStateWithLifecycle()
+    val transitionError by viewModel.transitionError.collectAsStateWithLifecycle()
+    val isPreviewingTransition by viewModel.isPreviewingTransition.collectAsStateWithLifecycle()
     val syntaxText by viewModel.syntaxText.collectAsStateWithLifecycle()
     val syntaxError by viewModel.syntaxError.collectAsStateWithLifecycle()
     val isSyntaxModalOpen by viewModel.isSyntaxModalOpen.collectAsStateWithLifecycle()
@@ -292,7 +307,7 @@ fun EditorScreen(
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = if (project?.customOutputDirUri != null) {
-                            "Pasta personalizada configurada (SAF)"
+                            "Pasta personalizada configurada (SAF) • Salva como padrão para novos projetos"
                         } else {
                             "Salvar padrão: /Movies/AppAnimador/"
                         },
@@ -303,12 +318,86 @@ fun EditorScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Palco de Teste Live (A primeira imagem da lista serve de palco de teste)
+            // Destaque: Botão "Gerar Prompts Automaticamente" (Requisito 4)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+                    .testTag("auto_prompts_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Sorteio Inteligente de Prompts",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Sorteia movimentos (0-10), durações (5-10s) e transições (0-20) para todas as fotos.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Button(
+                        onClick = { viewModel.generateAutomaticPrompts() },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("generate_automatic_prompts_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shuffle,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Gerar Prompts", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Palco de Teste Live com navegação, proporção dinâmica e moldura estúdio (Requisitos 2, 5 e 6)
             LivePreviewStage(
-                firstImage = images.firstOrNull(),
+                images = images,
+                currentImageIndex = currentImageIndex,
+                onPreviousImage = { viewModel.previousImage() },
+                onNextImage = { viewModel.nextImage() },
                 selectedMovement = selectedMovement,
+                selectedAspectRatio = selectedAspectRatio,
+                onAspectRatioChange = { viewModel.selectAspectRatio(it) },
+                selectedTransition = selectedTransition,
+                isPreviewingTransition = isPreviewingTransition,
+                onTogglePreviewMode = { viewModel.togglePreviewMode() },
                 isPlaying = isTestPlaying,
                 onTogglePlay = { viewModel.toggleTestPlaying() },
                 modifier = Modifier.padding(horizontal = 14.dp)
@@ -320,6 +409,26 @@ fun EditorScreen(
             MovementsCarousel(
                 selectedMovement = selectedMovement,
                 onSelectMovement = { viewModel.selectMovement(it) }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Carrossel Horizontal de Transições Suaves CapCut (Requisito 2)
+            TransitionsCarousel(
+                selectedTransition = selectedTransition,
+                onTransitionSelected = { viewModel.selectTransition(it) }
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Campo de Texto para Inserção de Transições com Validação Estrita (Requisito 3)
+            TransitionInputSection(
+                transitionIdsText = transitionIdsText,
+                onTransitionIdsChange = { viewModel.updateTransitionIdsText(it) },
+                errorMessage = transitionError,
+                selectedTransition = selectedTransition,
+                onQuickRandomize = { viewModel.generateAutomaticPrompts() },
+                modifier = Modifier.padding(horizontal = 14.dp)
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -346,7 +455,7 @@ fun EditorScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Botão Iniciar Renderização
+            // Botão Iniciar Renderização de Vídeo Único Completo (Requisito 1)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -356,7 +465,7 @@ fun EditorScreen(
                     onClick = { viewModel.startRendering(context) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(56.dp)
                         .testTag("start_rendering_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -364,16 +473,23 @@ fun EditorScreen(
                     )
                 ) {
                     Icon(
-                        imageVector = Icons.Default.PlayArrow,
+                        imageVector = Icons.Default.Movie,
                         contentDescription = null,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Iniciar Renderização de Vídeo",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Exportar Vídeo Único Completo",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Sequência unificada com transições suaves e progresso global",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
+                        )
+                    }
                 }
             }
 

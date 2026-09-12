@@ -104,11 +104,13 @@ enum class VideoBitratePreset(
  */
 data class VideoOutputConfig(
     val resolution: VideoResolution = VideoResolution.DEFAULT,
+    val aspectRatio: VideoAspectRatio = VideoAspectRatio.DEFAULT,
     val fps: Int = VideoFps.DEFAULT.fps,
     val bitrateMbps: Float = VideoBitratePreset.DEFAULT.mbps
 ) {
-    val width: Int get() = resolution.width
-    val height: Int get() = resolution.height
+    private val dimensions: Pair<Int, Int> get() = aspectRatio.calculateDimensions(resolution)
+    val width: Int get() = dimensions.first
+    val height: Int get() = dimensions.second
     val bitrateBps: Int get() = (bitrateMbps * 1_000_000).toInt()
-    val resolutionLabel: String get() = resolution.label
+    val resolutionLabel: String get() = "${resolution.label} (${aspectRatio.label})"
 }

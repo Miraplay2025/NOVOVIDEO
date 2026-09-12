@@ -10,6 +10,19 @@ sealed class SyntaxParseResult {
     ) : SyntaxParseResult()
 }
 
+sealed class TransitionValidationResult {
+    data class Success(val transitionIds: List<Int>) : TransitionValidationResult()
+    data class Error(
+        val message: String,
+        val faultyId: String? = null
+    ) : TransitionValidationResult()
+}
+
+data class RandomPromptResult(
+    val movementSyntaxText: String,
+    val transitionIdsText: String
+)
+
 object SyntaxParser {
 
     /**
@@ -166,7 +179,7 @@ object SyntaxParser {
     fun generateDefaultSyntax(
         totalImages: Int,
         defaultMovementId: Int = 1,
-        defaultDurationSeconds: Float = 4.0f
+        defaultDurationSeconds: Float = 6.0f
     ): String {
         if (totalImages <= 0) return ""
         return (1..totalImages).joinToString(",\n") { index ->
@@ -179,5 +192,77 @@ object SyntaxParser {
             val dur = String.format(java.util.Locale.US, "%.1fs", defaultDurationSeconds)
             "IMAGEM $index + MOVIMENTO $mov + $dur"
         }
+    }
+
+    /**
+     * Valida rígida e individualmente se todos os IDs informados existem na lista (1 a 20, ou 0).
+     */
+    fun validateTransitionIds(text: String): TransitionValidationResult {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            return TransitionValidationResult.Error(
+                "O campo de IDs de transições está vazio. Informe os IDs de 1 a 20 separados por vírgula (ex: 1, 4, 2, 8)."
+            )
+        }
+
+        val tokens = trimmed.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) {
+            return TransitionValidationResult.Error(
+                "Nenhum ID de transição encontrado. Informe IDs de 1 a 20 separados por vírgula."
+            )
+        }
+
+        val validIds = mutableListOf<Int>()
+        for (token in tokens) {
+            val id = token.toIntOrNull()
+            if (id == null) {
+                return TransitionValidationResult.Error(
+                    message = "ID de transição inválido: '$token'. Informe apenas números de 1 a 20 (ou 0 para sem transição) separados por vírgula.",
+                    faultyId = token
+                )
+            }
+            if (id !in 0..20) {
+                return TransitionValidationResult.Error(
+                    message = "ID de transição inexistente: '$token'. Os IDs válidos são de 1 a 20 inspirados no CapCut (ou 0 para sem transição).",
+                    faultyId = token
+                )
+            }
+            validIds.add(id)
+        }
+
+        return TransitionValidationResult.Success(validIds)
+    }
+
+    /**
+     * Gera prompts totalmente aleatórios conforme Requisito 4:
+     * - Movimentos de câmera aleatórios para cada imagem (0 a 10)
+     * - Duração de cada imagem aleatória no intervalo de 5.0s a 10.0s
+     * - IDs de transições gerados de forma totalmente aleatória (1 a 20)
+     */
+    fun generateRandomPrompts(totalImages: Int): RandomPromptResult {
+        if (totalImages <= 0) {
+            return RandomPromptResult(
+                movementSyntaxText = "",
+                transitionIdsText = "1, 4, 2, 8"
+            )
+        }
+
+        val random = java.util.Random()
+        val syntaxLines = (1..totalImages).map { index ->
+            val randomMov = random.nextInt(11) // 0 a 10
+            val randomDuration = 5.0f + (random.nextInt(51) / 10.0f) // 5.0s a 10.0s (passos de 0.1s)
+            val durFormatted = String.format(java.util.Locale.US, "%.1fs", randomDuration)
+            "IMAGEM $index + MOVIMENTO $randomMov + $durFormatted"
+        }
+
+        val transitionCount = (totalImages - 1).coerceAtLeast(1)
+        val randomTransitionIds = (1..transitionCount).map {
+            random.nextInt(20) + 1 // 1 a 20
+        }
+
+        return RandomPromptResult(
+            movementSyntaxText = syntaxLines.joinToString(",\n"),
+            transitionIdsText = randomTransitionIds.joinToString(", ")
+        )
     }
 }

@@ -69,4 +69,56 @@ class SyntaxParserTest {
         val error = (result as SyntaxParseResult.Error).message
         assertTrue(error.contains("Cobertura Total"))
     }
+
+    @Test
+    fun testTransitionValidationValidIds() {
+        val input = "0, 1, 5, 12, 20"
+        val result = SyntaxParser.validateTransitionIds(input)
+        assertTrue(result is com.example.engine.TransitionValidationResult.Success)
+        val ids = (result as com.example.engine.TransitionValidationResult.Success).transitionIds
+        assertEquals(listOf(0, 1, 5, 12, 20), ids)
+    }
+
+    @Test
+    fun testTransitionValidationOutOfRange() {
+        val input = "1, 21, 5"
+        val result = SyntaxParser.validateTransitionIds(input)
+        assertTrue(result is com.example.engine.TransitionValidationResult.Error)
+        val error = (result as com.example.engine.TransitionValidationResult.Error).message
+        assertTrue(error.contains("20"))
+    }
+
+    @Test
+    fun testTransitionValidationInvalidLetters() {
+        val input = "1, abc, 5"
+        val result = SyntaxParser.validateTransitionIds(input)
+        assertTrue(result is com.example.engine.TransitionValidationResult.Error)
+    }
+
+    @Test
+    fun testRandomPromptsGeneration() {
+        val imageCount = 4
+        val result = SyntaxParser.generateRandomPrompts(imageCount)
+
+        assertTrue(result.movementSyntaxText.isNotEmpty())
+        assertTrue(result.transitionIdsText.isNotEmpty())
+
+        // Valida que a sintaxe gerada passa na validação
+        val parseResult = SyntaxParser.parseAndValidate(result.movementSyntaxText, totalProjectImages = imageCount)
+        assertTrue(parseResult is SyntaxParseResult.Success)
+
+        val configs = (parseResult as SyntaxParseResult.Success).configs
+        assertEquals(imageCount, configs.size)
+
+        // Verifica limites de movimento (0-10) e duração (5.0s-10.0s)
+        for (cfg in configs) {
+            assertTrue("Movimento deve estar entre 0 e 10", cfg.movementId in 0..10)
+            assertTrue("Duração deve estar entre 5.0 e 10.0s", cfg.durationSeconds in 5.0f..10.01f)
+        }
+
+        // Valida que as transições geradas passam na validação
+        val transResult = SyntaxParser.validateTransitionIds(result.transitionIdsText)
+        assertTrue(transResult is com.example.engine.TransitionValidationResult.Success)
+    }
 }
+
