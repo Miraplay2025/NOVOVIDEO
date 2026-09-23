@@ -2,7 +2,6 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,10 +28,9 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -66,16 +64,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.ui.components.ImagesCarousel
+import com.example.data.model.VideoBitratePreset
 import com.example.ui.components.LivePreviewStage
+import com.example.ui.components.MasterConfigDialog
 import com.example.ui.components.MovementsCarousel
 import com.example.ui.components.ProgressLogModal
 import com.example.ui.components.SyntaxConfigDialog
-import com.example.ui.components.TransitionInputSection
 import com.example.ui.components.TransitionsCarousel
-import com.example.ui.components.VideoOutputSettingsCard
+import com.example.ui.components.VideoTimelineTrack
 import com.example.ui.viewmodel.EditorViewModel
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,7 +82,6 @@ fun EditorScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(projectId) {
@@ -111,6 +107,7 @@ fun EditorScreen(
     val syntaxError by viewModel.syntaxError.collectAsStateWithLifecycle()
     val isSyntaxModalOpen by viewModel.isSyntaxModalOpen.collectAsStateWithLifecycle()
     val isProgressModalOpen by viewModel.isProgressModalOpen.collectAsStateWithLifecycle()
+    val isMasterConfigOpen by viewModel.isMasterConfigOpen.collectAsStateWithLifecycle()
     val isTestPlaying by viewModel.isTestPlaying.collectAsStateWithLifecycle()
     val renderingState by viewModel.renderingState.collectAsStateWithLifecycle()
     val selectedResolution by viewModel.selectedResolution.collectAsStateWithLifecycle()
@@ -119,7 +116,7 @@ fun EditorScreen(
 
     // ActivityResultLaunchers para seleção de arquivos
 
-    // 1. Upload Direto (MIME permitidos: image/jpeg, image/png, image/webp)
+    // 1. Upload Direto de Imagens
     val directImagesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
@@ -142,7 +139,6 @@ fun EditorScreen(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         if (uri != null) {
-            // Persiste permissão de leitura/escrita no SAF
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
@@ -162,10 +158,11 @@ fun EditorScreen(
                         Text(
                             text = project?.name ?: "Editor de Vídeo",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                         Text(
-                            text = "${images.size} imagens importadas",
+                            text = "${images.size} fotos • Modo Profissional",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -183,15 +180,15 @@ fun EditorScreen(
                     }
                 },
                 actions = {
-                    // Se estiver renderizando em background, mostra chip de status
+                    // Badge de progresso se houver renderização ativa em segundo plano
                     if (renderingState.isRunning) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.primaryContainer,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { viewModel.reopenProgressModal() }
-                                .padding(end = 8.dp)
+                                .clickable { viewModel.openMasterConfig() }
+                                .padding(end = 4.dp)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -214,14 +211,28 @@ fun EditorScreen(
                         }
                     }
 
-                    // Botão "Configurações" no canto superior direito para abrir Pop-up da Sintaxe
-                    IconButton(
-                        onClick = { viewModel.openSyntaxModal() },
-                        modifier = Modifier.testTag("open_syntax_settings_button")
+                    // Botão "Configurar Tudo" de destaque no topo
+                    Button(
+                        onClick = { viewModel.openMasterConfig() },
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .testTag("top_master_config_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Configurações de Sintaxe"
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Configurar Tudo",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Configurar Tudo",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 },
@@ -237,156 +248,62 @@ fun EditorScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Seletor de Arquivos & Opções de Destino
+            // Barra rápida de Adição de Mídia e Ações Rápidas
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f),
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = "Importação e Destino",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { directImagesLauncher.launch("image/*") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("import_images_button"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AddPhotoAlternate,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Imagens", fontSize = 12.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed")) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("import_zip_button"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Archive,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Importar ZIP", fontSize = 12.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { directoryPickerLauncher.launch(null) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("select_output_folder_button"),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.FolderOpen,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Destino", fontSize = 12.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = if (project?.customOutputDirUri != null) {
-                            "Pasta personalizada configurada (SAF) • Salva como padrão para novos projetos"
-                        } else {
-                            "Salvar padrão: /Movies/AppAnimador/"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Destaque: Botão "Gerar Prompts Automaticamente" (Requisito 4)
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp)
-                    .testTag("auto_prompts_card"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                )
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Sorteio Inteligente de Prompts",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = "Sorteia movimentos (0-10), durações (5-10s) e transições (0-20) para todas as fotos.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
-                            fontSize = 11.sp
-                        )
+                    FilledTonalButton(
+                        onClick = { directImagesLauncher.launch("image/*") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("import_images_button"),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("+ Fotos", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
 
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Button(
-                        onClick = { viewModel.generateAutomaticPrompts() },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("generate_automatic_prompts_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        )
+                    OutlinedButton(
+                        onClick = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed")) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("import_zip_button"),
+                        shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Shuffle,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        Icon(imageVector = Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Gerar Prompts", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("ZIP", fontSize = 11.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.generateAutomaticPrompts() },
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .testTag("quick_auto_prompts_button"),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Sortear", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Palco de Teste Live com navegação, proporção dinâmica e moldura estúdio (Requisitos 2, 5 e 6)
+            // =========================================================================
+            // 1. UMA E ÚNICA ÁREA DE PRÉ-VISUALIZAÇÃO DE ANIMAÇÕES E TRANSIÇÕES
+            // (Com Proporções instantâneas: 16:9, 9:16, 1:1, 4:5 e moldura de estúdio)
+            // =========================================================================
             LivePreviewStage(
                 images = images,
                 currentImageIndex = currentImageIndex,
@@ -403,71 +320,63 @@ fun EditorScreen(
                 modifier = Modifier.padding(horizontal = 14.dp)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Carrossel Horizontal de Seleção de Animação de Movimento (0 a 10)
+            // =========================================================================
+            // 2. LINHA DO TEMPO DE VÍDEO PROFISSIONAL (TIMELINE TRACK)
+            // (Exatamente como nos grandes editores de vídeo: régua, playhead, clipes e nós)
+            // =========================================================================
+            VideoTimelineTrack(
+                images = images,
+                currentImageIndex = currentImageIndex,
+                onSelectImage = { viewModel.setImageIndex(it) },
+                selectedMovement = selectedMovement,
+                selectedTransition = selectedTransition,
+                onSelectTransition = {
+                    viewModel.selectTransition(it)
+                },
+                isPlaying = isTestPlaying,
+                onAddMediaClick = { directImagesLauncher.launch("image/*") },
+                modifier = Modifier.padding(horizontal = 14.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // =========================================================================
+            // 3. LINHA HORIZONTAL ROLÁVEL DE ANIMAÇÕES DE MOVIMENTO DE CÂMERA
+            // (27 Movimentos Profissionais: IDs 0 a 26)
+            // =========================================================================
             MovementsCarousel(
                 selectedMovement = selectedMovement,
                 onSelectMovement = { viewModel.selectMovement(it) }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Carrossel Horizontal de Transições Suaves CapCut (Requisito 2)
+            // =========================================================================
+            // 4. LINHA HORIZONTAL ROLÁVEL DE EFEITOS DE TRANSIÇÕES SUAVES
+            // (20 Transições Profissionais estilo CapCut + 0 Sem Transição)
+            // =========================================================================
             TransitionsCarousel(
                 selectedTransition = selectedTransition,
                 onTransitionSelected = { viewModel.selectTransition(it) }
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            // Campo de Texto para Inserção de Transições com Validação Estrita (Requisito 3)
-            TransitionInputSection(
-                transitionIdsText = transitionIdsText,
-                onTransitionIdsChange = { viewModel.updateTransitionIdsText(it) },
-                errorMessage = transitionError,
-                selectedTransition = selectedTransition,
-                onQuickRandomize = { viewModel.generateAutomaticPrompts() },
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Carrossel de Imagens com ContentScale.Fit, numeração 1..N e Long-Press para excluir
-            ImagesCarousel(
-                images = images,
-                onDeleteImage = { viewModel.deleteImage(it) }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Configurações de Saída do Vídeo (Resolução, FPS e Bitrate)
-            VideoOutputSettingsCard(
-                selectedResolution = selectedResolution,
-                onResolutionChange = { viewModel.selectResolution(it) },
-                selectedFps = selectedFps,
-                onFpsChange = { viewModel.selectFps(it) },
-                selectedBitrateMbps = selectedBitrateMbps,
-                onBitratePresetChange = { viewModel.selectBitratePreset(it) },
-                onBitrateSliderChange = { viewModel.setBitrateMbps(it) },
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Botão Iniciar Renderização de Vídeo Único Completo (Requisito 1)
+            // Botão de Rodapé Central: Exportar Vídeo Final Unificado
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
             ) {
                 Button(
-                    onClick = { viewModel.startRendering(context) },
+                    onClick = { viewModel.openMasterConfig() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .testTag("start_rendering_button"),
-                    shape = RoundedCornerShape(14.dp),
+                        .testTag("bottom_export_action_button"),
+                    shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     )
@@ -480,12 +389,12 @@ fun EditorScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "Exportar Vídeo Único Completo",
+                            text = "Configurar Tudo & Exportar Vídeo",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Sequência unificada com transições suaves e progresso global",
+                            text = "Defina qualidade, transições e inicie a exportação unificada",
                             fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                         )
@@ -497,7 +406,39 @@ fun EditorScreen(
         }
     }
 
-    // Modal de Configurações via Sintaxe Textual
+    // =========================================================================
+    // POP-UP CENTRALIZADOR: "CONFIGURAR TUDO" & EXPORTAR
+    // (Aba de Transições com validação 0-20, Qualidade de Saída, Sintaxe,
+    //  Área de Logs em tempo real, Banner do Diretório de Salvamento e Botão Iniciar)
+    // =========================================================================
+    MasterConfigDialog(
+        isOpen = isMasterConfigOpen,
+        project = project,
+        images = images,
+        selectedTransition = selectedTransition,
+        transitionIdsText = transitionIdsText,
+        transitionError = transitionError,
+        onTransitionIdsChange = { viewModel.updateTransitionIdsText(it) },
+        selectedResolution = selectedResolution,
+        onResolutionChange = { viewModel.selectResolution(it) },
+        selectedFps = selectedFps,
+        onFpsChange = { viewModel.selectFps(it) },
+        selectedBitrateMbps = selectedBitrateMbps,
+        onBitratePresetChange = { viewModel.selectBitratePreset(it) },
+        onBitrateSliderChange = { viewModel.setBitrateMbps(it) },
+        syntaxText = syntaxText,
+        syntaxError = syntaxError,
+        onSyntaxChange = { viewModel.updateSyntaxText(it) },
+        onAutoGeneratePrompts = { viewModel.generateAutomaticPrompts() },
+        onSaveAndValidateSyntax = { viewModel.validateAndSaveSyntax() },
+        renderingState = renderingState,
+        onStartRendering = { viewModel.startRendering(context) },
+        onCancelRendering = { viewModel.cancelRendering(context) },
+        onChangeDirectoryClick = { directoryPickerLauncher.launch(null) },
+        onDismiss = { viewModel.closeMasterConfig() }
+    )
+
+    // Modal de Sintaxe Textual Rápido
     SyntaxConfigDialog(
         isOpen = isSyntaxModalOpen,
         syntaxText = syntaxText,
@@ -509,7 +450,7 @@ fun EditorScreen(
         onDismiss = { viewModel.closeSyntaxModal() }
     )
 
-    // Modal de Acompanhamento de Progresso e Logs em Tempo Real
+    // Modal de Progresso em Tempo Real
     ProgressLogModal(
         isOpen = isProgressModalOpen,
         renderingState = renderingState,

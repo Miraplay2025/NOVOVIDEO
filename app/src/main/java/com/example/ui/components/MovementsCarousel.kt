@@ -18,12 +18,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.ChangeCircle
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.FilterDrama
+import androidx.compose.material.icons.filled.Flight
+import androidx.compose.material.icons.filled.HdrStrong
+import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.North
 import androidx.compose.material.icons.filled.NorthEast
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.South
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material.icons.filled.West
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
@@ -62,13 +76,29 @@ fun MovementsCarousel(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Movimentos de Câmera (0 a 26)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = "27 Animações",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
             Text(
-                text = "Catálogo de Movimentos (0 a 10)",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Clique para testar",
+                text = "Toque para aplicar",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -102,8 +132,8 @@ private fun MovementCard(
 
     Card(
         modifier = Modifier
-            .width(130.dp)
-            .height(105.dp)
+            .width(135.dp)
+            .height(110.dp)
             .clickable(onClick = onClick)
             .testTag("movement_card_${effect.id}"),
         shape = RoundedCornerShape(14.dp),
@@ -162,7 +192,7 @@ private fun MovementCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = effect.name,
@@ -199,6 +229,22 @@ private fun getIconForMovement(id: Int): ImageVector {
         8 -> Icons.Default.NorthEast
         9 -> Icons.Default.AutoAwesome
         10 -> Icons.Default.Vibration
-        else -> Icons.Default.CameraAlt
+        11 -> Icons.Default.MovieFilter
+        12 -> Icons.Default.ScreenRotation
+        13 -> Icons.Default.ChangeCircle
+        14 -> Icons.Default.Speed
+        15 -> Icons.Default.West
+        16 -> Icons.Default.CameraAlt
+        17 -> Icons.Default.Explore
+        18 -> Icons.Default.North
+        19 -> Icons.Default.South
+        20 -> Icons.Default.HdrStrong
+        21 -> Icons.Default.PanTool
+        22 -> Icons.Default.Waves
+        23 -> Icons.Default.SlowMotionVideo
+        24 -> Icons.Default.Flight
+        25 -> Icons.Default.Visibility
+        26 -> Icons.Default.FilterDrama
+        else -> Icons.Default.Videocam
     }
 }

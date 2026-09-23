@@ -125,10 +125,10 @@ object SyntaxParser {
                 )
             }
 
-            // Validação de Existência de Movimento: Só existem de 0 a 10
-            if (movementId !in 0..10) {
+            // Validação de Existência de Movimento: IDs de 0 a 26 (11 originais + 16 novos profissionais)
+            if (movementId !in 0..com.example.data.model.MovementEffect.MAX_ID) {
                 return SyntaxParseResult.Error(
-                    message = "Validação de Existência de Movimento falhou: MOVIMENTO $movementId é inexistente. Só existem animações de 0 a 10.",
+                    message = "Validação de Existência de Movimento falhou: MOVIMENTO $movementId é inexistente. Só existem animações de 0 a ${com.example.data.model.MovementEffect.MAX_ID}.",
                     faultySnippet = token
                 )
             }
@@ -249,7 +249,7 @@ object SyntaxParser {
 
         val random = java.util.Random()
         val syntaxLines = (1..totalImages).map { index ->
-            val randomMov = random.nextInt(11) // 0 a 10
+            val randomMov = random.nextInt(com.example.data.model.MovementEffect.MAX_ID + 1) // 0 a 26
             val randomDuration = 5.0f + (random.nextInt(51) / 10.0f) // 5.0s a 10.0s (passos de 0.1s)
             val durFormatted = String.format(java.util.Locale.US, "%.1fs", randomDuration)
             "IMAGEM $index + MOVIMENTO $randomMov + $durFormatted"

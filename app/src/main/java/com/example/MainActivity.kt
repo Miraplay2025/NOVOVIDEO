@@ -48,5 +48,15 @@ class MainActivity : ComponentActivity() {
       }
     }
   }
+
+  override fun onStart() {
+    super.onStart()
+    com.example.service.VideoRenderingService.notifyAppForeground(this)
+  }
+
+  override fun onStop() {
+    super.onStop()
+    com.example.service.VideoRenderingService.notifyAppBackground(this)
+  }
 }
 

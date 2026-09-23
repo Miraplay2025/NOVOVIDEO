@@ -101,6 +101,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _isProgressModalOpen = MutableStateFlow(false)
     val isProgressModalOpen: StateFlow<Boolean> = _isProgressModalOpen.asStateFlow()
 
+    private val _isMasterConfigOpen = MutableStateFlow(false)
+    val isMasterConfigOpen: StateFlow<Boolean> = _isMasterConfigOpen.asStateFlow()
+
     private val _isTestPlaying = MutableStateFlow(true)
     val isTestPlaying: StateFlow<Boolean> = _isTestPlaying.asStateFlow()
 
@@ -238,8 +241,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             repository.updateProjectSyntax(currentProjectId, result.movementSyntaxText)
-            _messageEvents.emit("Prompts automáticos gerados com movimentos (0-10), durações (5-10s) e transições (0-20)!")
+            _messageEvents.emit("Prompts automáticos gerados com movimentos (0-26), durações (5-10s) e transições (0-20)!")
         }
+    }
+
+    fun openMasterConfig() {
+        if (_syntaxText.value.isBlank() && _images.value.isNotEmpty()) {
+            _syntaxText.value = SyntaxParser.generateDefaultSyntax(_images.value.size, _selectedMovement.value.id)
+        }
+        _isMasterConfigOpen.value = true
+    }
+
+    fun closeMasterConfig() {
+        _isMasterConfigOpen.value = false
     }
 
     fun toggleTestPlaying() {

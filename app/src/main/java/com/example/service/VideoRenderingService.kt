@@ -42,6 +42,12 @@ class VideoRenderingService : Service() {
     private val NOTIFICATION_ID = 1001
     private val CHANNEL_ID = "channel_app_animador_render"
 
+    private var isNotificationHiddenByUser = false
+    private var lastNotificationContent = "Renderizando vídeo..."
+    private var lastCurrent = 0
+    private var lastTotal = 1
+    private var lastPercent = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -55,11 +61,37 @@ class VideoRenderingService : Service() {
             return START_NOT_STICKY
         }
 
-        if (ACTION_CANCEL == intent.action) {
-            RenderingManager.cancel()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent.action) {
+            ACTION_CANCEL -> {
+                RenderingManager.cancel()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_DISMISS_NOTIFICATION -> {
+                isNotificationHiddenByUser = true
+                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.cancel(NOTIFICATION_ID)
+                return START_NOT_STICKY
+            }
+            ACTION_APP_FOREGROUND -> {
+                isAppInForeground = true
+                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.cancel(NOTIFICATION_ID)
+                return START_NOT_STICKY
+            }
+            ACTION_APP_BACKGROUND -> {
+                isAppInForeground = false
+                isNotificationHiddenByUser = false
+                if (RenderingManager.state.value.isRunning) {
+                    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    manager.notify(
+                        NOTIFICATION_ID,
+                        buildNotification(lastNotificationContent, lastCurrent, lastTotal, lastPercent)
+                    )
+                }
+                return START_NOT_STICKY
+            }
         }
 
         val projectId = intent.getLongExtra(EXTRA_PROJECT_ID, -1L)
@@ -77,7 +109,16 @@ class VideoRenderingService : Service() {
             return START_NOT_STICKY
         }
 
+        // Garante que o diretório padrão exista fisicamente antes de iniciar qualquer renderização
+        AppPreferences.getInstance(applicationContext).ensureDefaultDirectory()
+
         startForeground(NOTIFICATION_ID, buildNotification("Iniciando renderização de vídeo unificado...", 0, configs.size, 0))
+
+        if (isAppInForeground) {
+            // Se o usuário já estiver dentro da app no início, oculta a notificação para não poluir
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel(NOTIFICATION_ID)
+        }
 
         serviceScope.launch {
             processBatch(
@@ -338,22 +379,40 @@ class VideoRenderingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val dismissIntent = Intent(this, VideoRenderingService::class.java).apply {
+            action = ACTION_DISMISS_NOTIFICATION
+        }
+        val dismissPendingIntent = PendingIntent.getService(
+            this,
+            2,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("AppAnimador — Renderizando Vídeos")
+            .setContentTitle("AppAnimador — Renderizando Vídeo")
             .setContentText(content)
             .setSubText("$percent%")
             .setProgress(100, percent, false)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancelar", cancelPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Parar", cancelPendingIntent)
+            .addAction(android.R.drawable.ic_menu_view, "Ocultar", dismissPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
     private fun updateNotification(content: String, current: Int, total: Int, percent: Int) {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification(content, current, total, percent))
+        lastNotificationContent = content
+        lastCurrent = current
+        lastTotal = total
+        lastPercent = percent
+
+        if (!isNotificationHiddenByUser && !isAppInForeground) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, buildNotification(content, current, total, percent))
+        }
     }
 
     private fun createNotificationChannel() {
@@ -378,6 +437,10 @@ class VideoRenderingService : Service() {
     companion object {
         const val ACTION_START = "com.example.service.action.START"
         const val ACTION_CANCEL = "com.example.service.action.CANCEL"
+        const val ACTION_DISMISS_NOTIFICATION = "com.example.service.action.DISMISS_NOTIFICATION"
+        const val ACTION_APP_FOREGROUND = "com.example.service.action.APP_FOREGROUND"
+        const val ACTION_APP_BACKGROUND = "com.example.service.action.APP_BACKGROUND"
+
         const val EXTRA_PROJECT_ID = "extra_project_id"
         const val EXTRA_CONFIGS = "extra_configs"
         const val EXTRA_CUSTOM_DIR_URI = "extra_custom_dir_uri"
@@ -387,6 +450,29 @@ class VideoRenderingService : Service() {
         const val EXTRA_VIDEO_BITRATE = "extra_video_bitrate"
         const val EXTRA_RESOLUTION_LABEL = "extra_resolution_label"
         const val EXTRA_TRANSITION_IDS = "extra_transition_ids"
+
+        @Volatile
+        var isAppInForeground: Boolean = false
+
+        fun notifyAppForeground(context: Context) {
+            isAppInForeground = true
+            try {
+                val intent = Intent(context, VideoRenderingService::class.java).apply {
+                    action = ACTION_APP_FOREGROUND
+                }
+                context.startService(intent)
+            } catch (_: Exception) {}
+        }
+
+        fun notifyAppBackground(context: Context) {
+            isAppInForeground = false
+            try {
+                val intent = Intent(context, VideoRenderingService::class.java).apply {
+                    action = ACTION_APP_BACKGROUND
+                }
+                context.startService(intent)
+            } catch (_: Exception) {}
+        }
 
         fun start(
             context: Context,

@@ -42,12 +42,12 @@ class SyntaxParserTest {
 
     @Test
     fun testInvalidMovementRangeError() {
-        val input = "IMAGEM 1 + MOVIMENTO 15 + 4.0s"
+        val input = "IMAGEM 1 + MOVIMENTO 35 + 4.0s"
         val result = SyntaxParser.parseAndValidate(input, totalProjectImages = 1)
 
         assertTrue(result is SyntaxParseResult.Error)
         val error = (result as SyntaxParseResult.Error).message
-        assertTrue(error.contains("0 a 10"))
+        assertTrue(error.contains("0 a 26"))
     }
 
     @Test
@@ -110,9 +110,9 @@ class SyntaxParserTest {
         val configs = (parseResult as SyntaxParseResult.Success).configs
         assertEquals(imageCount, configs.size)
 
-        // Verifica limites de movimento (0-10) e duração (5.0s-10.0s)
+        // Verifica limites de movimento (0-26) e duração (5.0s-10.0s)
         for (cfg in configs) {
-            assertTrue("Movimento deve estar entre 0 e 10", cfg.movementId in 0..10)
+            assertTrue("Movimento deve estar entre 0 e 26", cfg.movementId in 0..26)
             assertTrue("Duração deve estar entre 5.0 e 10.0s", cfg.durationSeconds in 5.0f..10.01f)
         }
 

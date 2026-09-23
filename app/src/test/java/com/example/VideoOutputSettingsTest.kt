@@ -88,6 +88,6 @@ class VideoOutputSettingsTest {
         assertEquals(720, config.height)
         assertEquals(60, config.fps)
         assertEquals(8_000_000, config.bitrateBps)
-        assertEquals("720p (1280x720) [HD]", config.resolutionLabel)
+        assertEquals("720p (1280x720) [HD] (16:9)", config.resolutionLabel)
     }
 }
