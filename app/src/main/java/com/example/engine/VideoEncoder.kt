@@ -10,7 +10,9 @@ import android.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
+import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import com.example.data.model.MovementEffect
 import com.example.data.model.TransitionEffect
@@ -23,7 +25,8 @@ data class RenderSequenceItem(
     val imageFile: File,
     val movementEffect: MovementEffect,
     val durationSeconds: Float,
-    val transitionToNext: TransitionEffect = TransitionEffect.DEFAULT
+    val transitionToNext: TransitionEffect = TransitionEffect.DEFAULT,
+    val transitionSoundIdToNext: Int = 0
 )
 
 object VideoEncoder {
@@ -56,6 +59,10 @@ object VideoEncoder {
         val itemFrames = sequence.map { (it.durationSeconds * frameRate).toInt().coerceAtLeast(frameRate) }
         val totalGlobalFrames = itemFrames.sum().coerceAtLeast(1)
 
+        val rawVideoFile = File(outputFile.parentFile, "raw_${System.currentTimeMillis()}_${outputFile.name}")
+        if (rawVideoFile.exists()) {
+            rawVideoFile.delete()
+        }
         outputFile.parentFile?.mkdirs()
         if (outputFile.exists()) {
             outputFile.delete()
@@ -80,7 +87,7 @@ object VideoEncoder {
             encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             encoder.start()
 
-            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = MediaMuxer(rawVideoFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             var videoTrackIndex = -1
             var muxerStarted = false
 
@@ -204,18 +211,46 @@ object VideoEncoder {
                         return@withContext false
                     }
 
-                    val progress = f.toFloat() / (totalItemFrames - 1).coerceAtLeast(1)
+                    val isCurrentVideo = MediaHelper.isVideo(item.imageFile.name)
                     canvas.drawColor(Color.BLACK)
-                    item.movementEffect.applyToMatrix(
-                        matrix = matrixCurrent,
-                        progress = progress,
-                        canvasW = targetWidth.toFloat(),
-                        canvasH = targetHeight.toFloat(),
-                        bitmapW = currentBitmap.width.toFloat(),
-                        bitmapH = currentBitmap.height.toFloat()
-                    )
-                    paint.alpha = 255
-                    canvas.drawBitmap(currentBitmap, matrixCurrent, paint)
+
+                    if (isCurrentVideo) {
+                        val retriever = MediaMetadataRetriever()
+                        val frameTimeUs = (f * 1_000_000L) / frameRate
+                        val videoFrame = try {
+                            retriever.setDataSource(item.imageFile.absolutePath)
+                            retriever.getFrameAtTime(frameTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        } catch (_: Exception) { null } finally {
+                            try { retriever.release() } catch (_: Exception) {}
+                        }
+
+                        if (videoFrame != null) {
+                            val scale = minOf(targetWidth.toFloat() / videoFrame.width, targetHeight.toFloat() / videoFrame.height)
+                            val dx = (targetWidth - videoFrame.width * scale) / 2f
+                            val dy = (targetHeight - videoFrame.height * scale) / 2f
+                            matrixCurrent.reset()
+                            matrixCurrent.postScale(scale, scale)
+                            matrixCurrent.postTranslate(dx, dy)
+                            paint.alpha = 255
+                            canvas.drawBitmap(videoFrame, matrixCurrent, paint)
+                            videoFrame.recycle()
+                        } else {
+                            paint.alpha = 255
+                            canvas.drawBitmap(currentBitmap, matrixCurrent, paint)
+                        }
+                    } else {
+                        val progress = f.toFloat() / (totalItemFrames - 1).coerceAtLeast(1)
+                        item.movementEffect.applyToMatrix(
+                            matrix = matrixCurrent,
+                            progress = progress,
+                            canvasW = targetWidth.toFloat(),
+                            canvasH = targetHeight.toFloat(),
+                            bitmapW = currentBitmap.width.toFloat(),
+                            bitmapH = currentBitmap.height.toFloat()
+                        )
+                        paint.alpha = 255
+                        canvas.drawBitmap(currentBitmap, matrixCurrent, paint)
+                    }
 
                     val isVeryLastFrame = (i == sequence.size - 1) && (f == pureCameraFrames - 1)
                     if (!queueCurrentFrame(isVeryLastFrame)) {
@@ -310,12 +345,36 @@ object VideoEncoder {
             currentBitmap?.recycle()
             nextBitmap?.recycle()
             frameBitmap.recycle()
+
+            val hasSound = sequence.any { it.transitionSoundIdToNext != 0 }
+            if (hasSound) {
+                onGlobalProgress(
+                    totalGlobalFrames,
+                    totalGlobalFrames,
+                    sequence.size - 1,
+                    "Sincronizando áudio das transições..."
+                )
+                applyTransitionAudioTrack(
+                    tempVideoFile = rawVideoFile,
+                    finalOutputFile = outputFile,
+                    sequence = sequence,
+                    itemFrames = itemFrames,
+                    frameRate = frameRate
+                )
+            } else {
+                rawVideoFile.copyTo(outputFile, overwrite = true)
+                rawVideoFile.delete()
+            }
+
             return@withContext true
         } catch (e: Exception) {
             e.printStackTrace()
             cleanup(encoder, muxer, false)
             currentBitmap?.recycle()
             nextBitmap?.recycle()
+            if (rawVideoFile.exists()) {
+                rawVideoFile.delete()
+            }
             if (outputFile.exists()) {
                 outputFile.delete()
             }
@@ -608,6 +667,18 @@ object VideoEncoder {
     }
 
     private fun loadOptimizedBitmap(file: File, maxW: Int, maxH: Int): Bitmap? {
+        if (MediaHelper.isVideo(file.name)) {
+            val retriever = MediaMetadataRetriever()
+            return try {
+                retriever.setDataSource(file.absolutePath)
+                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } catch (_: Exception) {
+                null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
+        }
+
         val options = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
@@ -645,6 +716,181 @@ object VideoEncoder {
             rotated
         } catch (_: Exception) {
             decoded
+        }
+    }
+
+    private fun applyTransitionAudioTrack(
+        tempVideoFile: File,
+        finalOutputFile: File,
+        sequence: List<RenderSequenceItem>,
+        itemFrames: List<Int>,
+        frameRate: Int
+    ) {
+        try {
+            val totalFrames = itemFrames.sum()
+            val sampleRate = 44100
+            val totalSamples = ((totalFrames.toDouble() / frameRate) * sampleRate).toInt().coerceAtLeast(sampleRate)
+            val audioPcm = ShortArray(totalSamples)
+
+            var accumulatedFrames = 0
+            for (i in sequence.indices) {
+                val totalItemFrames = itemFrames[i]
+                val hasNext = i < sequence.size - 1
+                val transFrames = if (hasNext && sequence[i].transitionToNext.id != 0) {
+                    (1.0f * frameRate).toInt().coerceIn(1, totalItemFrames / 2)
+                } else 0
+                val pureCameraFrames = totalItemFrames - transFrames
+                val transitionStartFrame = accumulatedFrames + pureCameraFrames
+
+                val soundId = sequence[i].transitionSoundIdToNext
+                if (soundId != 0 && hasNext) {
+                    val soundPcm = TransitionSoundEngine.generatePcmForBuiltInSound(soundId)
+                    if (soundPcm.isNotEmpty()) {
+                        val sampleOffset = ((transitionStartFrame.toDouble() / frameRate) * sampleRate).toInt()
+                        for (s in soundPcm.indices) {
+                            val targetIdx = sampleOffset + s
+                            if (targetIdx < audioPcm.size) {
+                                val mixed = audioPcm[targetIdx].toInt() + soundPcm[s].toInt()
+                                audioPcm[targetIdx] = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                            }
+                        }
+                    }
+                }
+                accumulatedFrames += totalItemFrames
+            }
+
+            muxVideoAndAudio(tempVideoFile, finalOutputFile, audioPcm, sampleRate)
+        } catch (_: Exception) {
+            tempVideoFile.copyTo(finalOutputFile, overwrite = true)
+            tempVideoFile.delete()
+        }
+    }
+
+    private fun muxVideoAndAudio(
+        videoSourceFile: File,
+        destinationFile: File,
+        audioPcm: ShortArray,
+        sampleRate: Int
+    ) {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(videoSourceFile.absolutePath)
+        } catch (e: Exception) {
+            videoSourceFile.copyTo(destinationFile, overwrite = true)
+            videoSourceFile.delete()
+            return
+        }
+
+        var videoTrackIndex = -1
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+            if (mime.startsWith("video/")) {
+                videoTrackIndex = i
+                extractor.selectTrack(i)
+                break
+            }
+        }
+
+        if (videoTrackIndex == -1) {
+            extractor.release()
+            videoSourceFile.copyTo(destinationFile, overwrite = true)
+            videoSourceFile.delete()
+            return
+        }
+
+        val videoFormat = extractor.getTrackFormat(videoTrackIndex)
+        val muxer = MediaMuxer(destinationFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val outVideoTrack = muxer.addTrack(videoFormat)
+
+        // AAC Audio Encoder
+        val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 64_000)
+        }
+
+        var audioEncoder: MediaCodec? = null
+        try {
+            audioEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            audioEncoder.configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            audioEncoder.start()
+
+            val audioBufferInfo = MediaCodec.BufferInfo()
+            var outAudioTrack = -1
+            var muxerStarted = false
+
+            val pcmBytes = ByteArray(audioPcm.size * 2)
+            ByteBuffer.wrap(pcmBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(audioPcm)
+
+            var pcmOffset = 0
+            var inputDone = false
+            var outputDone = false
+
+            while (!outputDone) {
+                if (!inputDone) {
+                    val inIdx = audioEncoder.dequeueInputBuffer(10_000)
+                    if (inIdx >= 0) {
+                        val inBuf = audioEncoder.getInputBuffer(inIdx)
+                        inBuf?.clear()
+                        val remaining = pcmBytes.size - pcmOffset
+                        val chunkSize = minOf(remaining, inBuf?.remaining() ?: 4096)
+                        if (chunkSize > 0 && inBuf != null) {
+                            inBuf.put(pcmBytes, pcmOffset, chunkSize)
+                            val ptsUs = (pcmOffset.toLong() * 1_000_000L) / (sampleRate * 2L)
+                            audioEncoder.queueInputBuffer(inIdx, 0, chunkSize, ptsUs, 0)
+                            pcmOffset += chunkSize
+                        } else {
+                            audioEncoder.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        }
+                    }
+                }
+
+                val outIdx = audioEncoder.dequeueOutputBuffer(audioBufferInfo, 10_000)
+                if (outIdx >= 0) {
+                    val outBuf = audioEncoder.getOutputBuffer(outIdx)
+                    if (muxerStarted && audioBufferInfo.size > 0 && outBuf != null) {
+                        outBuf.position(audioBufferInfo.offset)
+                        outBuf.limit(audioBufferInfo.offset + audioBufferInfo.size)
+                        muxer.writeSampleData(outAudioTrack, outBuf, audioBufferInfo)
+                    }
+                    audioEncoder.releaseOutputBuffer(outIdx, false)
+                    if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        outputDone = true
+                    }
+                } else if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val actualAudioFormat = audioEncoder.outputFormat
+                    outAudioTrack = muxer.addTrack(actualAudioFormat)
+                    muxer.start()
+                    muxerStarted = true
+
+                    // Transfere os samples de vídeo para o muxer agora que iniciou
+                    val videoBuf = ByteBuffer.allocate(1024 * 1024)
+                    val videoBufInfo = MediaCodec.BufferInfo()
+                    while (true) {
+                        videoBufInfo.offset = 0
+                        videoBufInfo.size = extractor.readSampleData(videoBuf, 0)
+                        if (videoBufInfo.size < 0) break
+                        videoBufInfo.presentationTimeUs = extractor.sampleTime
+                        videoBufInfo.flags = extractor.sampleFlags
+                        muxer.writeSampleData(outVideoTrack, videoBuf, videoBufInfo)
+                        extractor.advance()
+                    }
+                }
+            }
+
+            audioEncoder.stop()
+            audioEncoder.release()
+            muxer.stop()
+            muxer.release()
+            extractor.release()
+            videoSourceFile.delete()
+        } catch (_: Exception) {
+            try { audioEncoder?.release() } catch (_: Exception) {}
+            try { extractor.release() } catch (_: Exception) {}
+            try { muxer.release() } catch (_: Exception) {}
+            videoSourceFile.copyTo(destinationFile, overwrite = true)
+            videoSourceFile.delete()
         }
     }
 }

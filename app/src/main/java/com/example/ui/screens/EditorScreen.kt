@@ -71,6 +71,7 @@ import com.example.ui.components.MovementsCarousel
 import com.example.ui.components.ProgressLogModal
 import com.example.ui.components.SyntaxConfigDialog
 import com.example.ui.components.TransitionsCarousel
+import com.example.ui.components.TransitionSoundsCarousel
 import com.example.ui.components.VideoTimelineTrack
 import com.example.ui.viewmodel.EditorViewModel
 
@@ -102,6 +103,10 @@ fun EditorScreen(
     val selectedTransition by viewModel.selectedTransition.collectAsStateWithLifecycle()
     val transitionIdsText by viewModel.transitionIdsText.collectAsStateWithLifecycle()
     val transitionError by viewModel.transitionError.collectAsStateWithLifecycle()
+    val allAvailableSounds by viewModel.allAvailableSounds.collectAsStateWithLifecycle()
+    val selectedSound by viewModel.selectedSound.collectAsStateWithLifecycle()
+    val transitionSoundIdsText by viewModel.transitionSoundIdsText.collectAsStateWithLifecycle()
+    val transitionSoundError by viewModel.transitionSoundError.collectAsStateWithLifecycle()
     val isPreviewingTransition by viewModel.isPreviewingTransition.collectAsStateWithLifecycle()
     val syntaxText by viewModel.syntaxText.collectAsStateWithLifecycle()
     val syntaxError by viewModel.syntaxError.collectAsStateWithLifecycle()
@@ -116,12 +121,21 @@ fun EditorScreen(
 
     // ActivityResultLaunchers para seleção de arquivos
 
-    // 1. Upload Direto de Imagens
+    // 1. Upload Direto de Fotos e Vídeos
     val directImagesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             viewModel.importDirectImages(context, uris)
+        }
+    }
+
+    // 2. Upload de Som Personalizado de Transição
+    val customSoundLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.uploadCustomSound(uri)
         }
     }
 
@@ -261,7 +275,7 @@ fun EditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     FilledTonalButton(
-                        onClick = { directImagesLauncher.launch("image/*") },
+                        onClick = { directImagesLauncher.launch("*/*") },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("import_images_button"),
@@ -269,7 +283,7 @@ fun EditorScreen(
                     ) {
                         Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("+ Fotos", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text("+ Mídias", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
 
                     OutlinedButton(
@@ -362,6 +376,21 @@ fun EditorScreen(
                 onTransitionSelected = { viewModel.selectTransition(it) }
             )
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // =========================================================================
+            // 5. LINHA HORIZONTAL ROLÁVEL DE SONS DE TRANSIÇÕES RÁPIDAS
+            // (12 Sons Rápidos + Cliques de Teclado/Botão + Sem Som + Upload Personalizado)
+            // =========================================================================
+            TransitionSoundsCarousel(
+                selectedSound = selectedSound,
+                allSounds = allAvailableSounds,
+                onSelectSound = { viewModel.selectSound(it) },
+                onUploadSound = { customSoundLauncher.launch("audio/*") },
+                onDeleteSound = { viewModel.deleteCustomSound(it) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
             Spacer(modifier = Modifier.height(18.dp))
 
             // Botão de Rodapé Central: Exportar Vídeo Final Unificado
@@ -419,6 +448,11 @@ fun EditorScreen(
         transitionIdsText = transitionIdsText,
         transitionError = transitionError,
         onTransitionIdsChange = { viewModel.updateTransitionIdsText(it) },
+        transitionSoundIdsText = transitionSoundIdsText,
+        transitionSoundError = transitionSoundError,
+        onTransitionSoundIdsChange = { viewModel.updateTransitionSoundIdsText(it) },
+        availableSounds = allAvailableSounds,
+        onPlaySoundTest = { viewModel.playSoundTest(it) },
         selectedResolution = selectedResolution,
         onResolutionChange = { viewModel.selectResolution(it) },
         selectedFps = selectedFps,

@@ -18,14 +18,30 @@ object ImageImportHelper {
     private val ALLOWED_MIME_TYPES = setOf(
         "image/jpeg",
         "image/png",
-        "image/webp"
+        "image/webp",
+        "image/bmp",
+        "image/heic",
+        "video/mp4",
+        "video/3gpp",
+        "video/webm",
+        "video/quicktime",
+        "video/x-matroska",
+        "video/avi"
     )
 
     private val ALLOWED_EXTENSIONS = setOf(
         "jpg",
         "jpeg",
         "png",
-        "webp"
+        "webp",
+        "bmp",
+        "heic",
+        "mp4",
+        "3gp",
+        "webm",
+        "mov",
+        "mkv",
+        "avi"
     )
 
     suspend fun importImages(
@@ -48,17 +64,22 @@ object ImageImportHelper {
             val fileName = getFileName(context, uri)
             val ext = fileName.substringAfterLast('.', "").lowercase()
 
-            val isValidMime = mimeType != null && mimeType in ALLOWED_MIME_TYPES
+            val isValidMime = mimeType != null && (
+                mimeType in ALLOWED_MIME_TYPES ||
+                mimeType.startsWith("image/") ||
+                mimeType.startsWith("video/")
+            )
             val isValidExt = ext in ALLOWED_EXTENSIONS
 
             if (!isValidMime && !isValidExt) {
-                return@withContext ImageImportResult.Error("Arquivo inválido. Selecione apenas imagens.")
+                return@withContext ImageImportResult.Error("Arquivo inválido ($fileName). Selecione imagens ou vídeos suportados.")
             }
 
             try {
+                val prefix = if (MediaHelper.isVideo(fileName)) "vid" else "img"
                 val targetFile = File(
                     destFolder,
-                    "img_${System.currentTimeMillis()}_${result.size + 1}_$fileName"
+                    "${prefix}_${System.currentTimeMillis()}_${result.size + 1}_$fileName"
                 )
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     FileOutputStream(targetFile).use { output ->
@@ -67,7 +88,7 @@ object ImageImportHelper {
                 }
                 result.add(Pair(targetFile.absolutePath, fileName))
             } catch (e: Exception) {
-                return@withContext ImageImportResult.Error("Falha ao ler imagem: ${e.message}")
+                return@withContext ImageImportResult.Error("Falha ao ler mídia: ${e.message}")
             }
         }
 
@@ -75,7 +96,7 @@ object ImageImportHelper {
     }
 
     private fun getFileName(context: Context, uri: Uri): String {
-        var name = "image_${System.currentTimeMillis()}.jpg"
+        var name = "media_${System.currentTimeMillis()}.jpg"
         val cursor = context.contentResolver.query(uri, null, null, null, null)
         cursor?.use {
             if (it.moveToFirst()) {

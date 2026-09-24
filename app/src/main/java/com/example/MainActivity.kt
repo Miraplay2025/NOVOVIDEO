@@ -54,6 +54,11 @@ class MainActivity : ComponentActivity() {
     com.example.service.VideoRenderingService.notifyAppForeground(this)
   }
 
+  override fun onResume() {
+    super.onResume()
+    com.example.service.VideoRenderingService.notifyAppForeground(this)
+  }
+
   override fun onStop() {
     super.onStop()
     com.example.service.VideoRenderingService.notifyAppBackground(this)

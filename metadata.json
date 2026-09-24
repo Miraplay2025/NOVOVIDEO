@@ -1,6 +1,6 @@
 {
-  "name": "AppAnimador",
-  "description": "Criação automatizada de vídeos animando imagens estáticas com efeitos de câmera e processamento em segundo plano",
+  "name": "Editor Automático",
+  "description": "Editor profissional de vídeo automatizado com animações de câmera, transições suaves, efeitos sonoros rápidos e exportação em segundo plano",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

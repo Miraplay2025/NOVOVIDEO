@@ -103,6 +103,7 @@ class VideoRenderingService : Service() {
         val videoBitrate = intent.getIntExtra(EXTRA_VIDEO_BITRATE, 5_000_000)
         val resolutionLabel = intent.getStringExtra(EXTRA_RESOLUTION_LABEL) ?: "${videoWidth}x${videoHeight}"
         val transitionIds = intent.getIntegerArrayListExtra(EXTRA_TRANSITION_IDS) ?: arrayListOf(1)
+        val transitionSoundIds = intent.getIntegerArrayListExtra(EXTRA_TRANSITION_SOUND_IDS) ?: arrayListOf<Int>()
 
         if (projectId == -1L || configs.isNullOrEmpty()) {
             stopSelf()
@@ -125,6 +126,7 @@ class VideoRenderingService : Service() {
                 projectId = projectId,
                 configs = configs,
                 transitionIds = transitionIds,
+                transitionSoundIds = transitionSoundIds,
                 customOutputDirUri = customOutputDirUri,
                 videoWidth = videoWidth,
                 videoHeight = videoHeight,
@@ -141,6 +143,7 @@ class VideoRenderingService : Service() {
         projectId: Long,
         configs: List<RenderConfigParcel>,
         transitionIds: List<Int>,
+        transitionSoundIds: List<Int>,
         customOutputDirUri: String?,
         videoWidth: Int,
         videoHeight: Int,
@@ -166,11 +169,12 @@ class VideoRenderingService : Service() {
         val defaultOutputDir = AppPreferences.getInstance(applicationContext).ensureDefaultDirectory()
 
         // Constrói os itens da sequência completa de vídeo unificado
+        val soundPool = if (transitionSoundIds.isNotEmpty()) transitionSoundIds else listOf(0)
         val sequenceItems = mutableListOf<RenderSequenceItem>()
         for ((index, item) in configs.withIndex()) {
             val projectImage = imagesByOrder[item.imageIndex]
             if (projectImage == null) {
-                RenderingManager.log("Aviso: Imagem #${item.imageIndex} não encontrada no banco.")
+                RenderingManager.log("Aviso: Mídia #${item.imageIndex} não encontrada no banco.")
                 continue
             }
 
@@ -187,13 +191,16 @@ class VideoRenderingService : Service() {
                 1
             }
             val transEffect = TransitionEffect.getOrCut(transId)
+            val hasNext = index < configs.size - 1
+            val chosenSoundId = if (hasNext && soundPool.isNotEmpty()) soundPool.random() else 0
 
             sequenceItems.add(
                 RenderSequenceItem(
                     imageFile = imageFile,
                     movementEffect = effect,
                     durationSeconds = item.durationSeconds,
-                    transitionToNext = transEffect
+                    transitionToNext = transEffect,
+                    transitionSoundIdToNext = chosenSoundId
                 )
             )
         }
@@ -272,7 +279,13 @@ class VideoRenderingService : Service() {
         }
 
         RenderingManager.completeBatch()
-        updateNotification("Vídeo final renderizado e salvo com sucesso!", totalImages, totalImages, 100)
+        if (!isAppInForeground) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, buildSuccessNotification("Vídeo final renderizado e salvo com sucesso!"))
+        } else {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel(NOTIFICATION_ID)
+        }
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
     }
@@ -391,7 +404,7 @@ class VideoRenderingService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("AppAnimador — Renderizando Vídeo")
+            .setContentTitle("Editor Automático — Renderizando Vídeo")
             .setContentText(content)
             .setSubText("$percent%")
             .setProgress(100, percent, false)
@@ -400,6 +413,39 @@ class VideoRenderingService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Parar", cancelPendingIntent)
             .addAction(android.R.drawable.ic_menu_view, "Ocultar", dismissPendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    private fun buildSuccessNotification(content: String): Notification {
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val dismissIntent = Intent(this, VideoRenderingService::class.java).apply {
+            action = ACTION_DISMISS_NOTIFICATION
+        }
+        val dismissPendingIntent = PendingIntent.getService(
+            this,
+            2,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Editor Automático — Concluído")
+            .setContentText(content)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Fechar", dismissPendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
     }
 
@@ -450,6 +496,7 @@ class VideoRenderingService : Service() {
         const val EXTRA_VIDEO_BITRATE = "extra_video_bitrate"
         const val EXTRA_RESOLUTION_LABEL = "extra_resolution_label"
         const val EXTRA_TRANSITION_IDS = "extra_transition_ids"
+        const val EXTRA_TRANSITION_SOUND_IDS = "extra_transition_sound_ids"
 
         @Volatile
         var isAppInForeground: Boolean = false
@@ -484,7 +531,8 @@ class VideoRenderingService : Service() {
             videoFps: Int = 30,
             videoBitrateBps: Int = 5_000_000,
             resolutionLabel: String = "720p (1280x720) [HD]",
-            transitionIds: List<Int> = listOf(1)
+            transitionIds: List<Int> = listOf(1),
+            transitionSoundIds: List<Int> = emptyList()
         ) {
             val parcelList = ArrayList(configs.map {
                 RenderConfigParcel(it.imageIndex, it.movementId, it.durationSeconds)
@@ -494,6 +542,7 @@ class VideoRenderingService : Service() {
                 putExtra(EXTRA_PROJECT_ID, projectId)
                 putParcelableArrayListExtra(EXTRA_CONFIGS, parcelList)
                 putIntegerArrayListExtra(EXTRA_TRANSITION_IDS, ArrayList(transitionIds))
+                putIntegerArrayListExtra(EXTRA_TRANSITION_SOUND_IDS, ArrayList(transitionSoundIds))
                 putExtra(EXTRA_CUSTOM_DIR_URI, customDirUri)
                 putExtra(EXTRA_VIDEO_WIDTH, videoWidth)
                 putExtra(EXTRA_VIDEO_HEIGHT, videoHeight)

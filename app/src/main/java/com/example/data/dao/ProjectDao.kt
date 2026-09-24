@@ -39,6 +39,9 @@ interface ProjectDao {
     @Query("SELECT * FROM project_images WHERE projectId = :projectId ORDER BY orderIndex ASC")
     suspend fun getImagesForProjectSync(projectId: Long): List<ProjectImage>
 
+    @Query("SELECT * FROM project_images WHERE projectId = :projectId ORDER BY orderIndex ASC LIMIT 1")
+    suspend fun getFirstMediaForProjectSync(projectId: Long): ProjectImage?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImages(images: List<ProjectImage>)
 

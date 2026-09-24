@@ -27,14 +27,17 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -76,6 +79,7 @@ import com.example.data.model.MovementEffect
 import com.example.data.model.Project
 import com.example.data.model.ProjectImage
 import com.example.data.model.TransitionEffect
+import com.example.data.model.TransitionSoundEffect
 import com.example.data.model.VideoBitratePreset
 import com.example.data.model.VideoFps
 import com.example.data.model.VideoResolution
@@ -98,6 +102,11 @@ fun MasterConfigDialog(
     transitionIdsText: String,
     transitionError: String?,
     onTransitionIdsChange: (String) -> Unit,
+    transitionSoundIdsText: String = "",
+    transitionSoundError: String? = null,
+    onTransitionSoundIdsChange: (String) -> Unit = {},
+    availableSounds: List<TransitionSoundEffect> = emptyList(),
+    onPlaySoundTest: (TransitionSoundEffect) -> Unit = {},
     selectedResolution: VideoResolution,
     onResolutionChange: (VideoResolution) -> Unit,
     selectedFps: Int,
@@ -119,7 +128,7 @@ fun MasterConfigDialog(
     if (!isOpen) return
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabTitles = listOf("Transições", "Qualidade", "Sintaxe & IA", "Logs & Status")
+    val tabTitles = listOf("Transições", "Sons de Transições", "Qualidade", "Sintaxe & IA", "Logs & Status")
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -254,7 +263,14 @@ fun MasterConfigDialog(
                             onTransitionIdsChange = onTransitionIdsChange,
                             onAutoGeneratePrompts = onAutoGeneratePrompts
                         )
-                        1 -> QualityTabContent(
+                        1 -> TransitionSoundsTabContent(
+                            transitionSoundIdsText = transitionSoundIdsText,
+                            transitionSoundError = transitionSoundError,
+                            onTransitionSoundIdsChange = onTransitionSoundIdsChange,
+                            availableSounds = availableSounds,
+                            onPlaySoundTest = onPlaySoundTest
+                        )
+                        2 -> QualityTabContent(
                             selectedResolution = selectedResolution,
                             onResolutionChange = onResolutionChange,
                             selectedFps = selectedFps,
@@ -263,7 +279,7 @@ fun MasterConfigDialog(
                             onBitratePresetChange = onBitratePresetChange,
                             onBitrateSliderChange = onBitrateSliderChange
                         )
-                        2 -> SyntaxTabContent(
+                        3 -> SyntaxTabContent(
                             syntaxText = syntaxText,
                             syntaxError = syntaxError,
                             totalImages = images.size,
@@ -271,7 +287,7 @@ fun MasterConfigDialog(
                             onAutoGeneratePrompts = onAutoGeneratePrompts,
                             onSaveAndValidate = onSaveAndValidateSyntax
                         )
-                        3 -> LogsTabContent(
+                        4 -> LogsTabContent(
                             renderingState = renderingState,
                             onCancelRendering = onCancelRendering
                         )
@@ -548,6 +564,211 @@ private fun TransitionsTabContent(
                         color = Color(0xFF94A3B8),
                         modifier = Modifier.align(Alignment.CenterVertically)
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Aba de Sons de Transições (Menu de Sons no Pop-up Configurar Tudo)
+ */
+@Composable
+private fun TransitionSoundsTabContent(
+    transitionSoundIdsText: String,
+    transitionSoundError: String?,
+    onTransitionSoundIdsChange: (String) -> Unit,
+    availableSounds: List<TransitionSoundEffect>,
+    onPlaySoundTest: (TransitionSoundEffect) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .testTag("transition_sounds_tab_content")
+    ) {
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF192030)),
+            border = BorderStroke(1.dp, Color(0xFF2B3650))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Sons de Transições Rápidas",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF1E283C)
+                    ) {
+                        Text(
+                            text = "12 Efeitos + Teclas",
+                            fontSize = 10.sp,
+                            color = Color(0xFF00E5FF),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Digite os IDs dos sons separados por vírgula (ex: 1, 5, 2, 7, 12). A cada troca de mídia, o sistema sorteará aleatoriamente um som da lista para tocar.",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = transitionSoundIdsText,
+                    onValueChange = onTransitionSoundIdsChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dialog_transition_sound_ids_input"),
+                    label = { Text("IDs dos Sons de Transição (ex: 1, 5, 2, 7)", fontSize = 12.sp) },
+                    placeholder = { Text("1, 5, 2, 7") },
+                    isError = transitionSoundError != null,
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF00E5FF),
+                        unfocusedBorderColor = Color(0xFF384360),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
+                )
+
+                if (transitionSoundError != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = transitionSoundError,
+                        color = Color(0xFFFF5252),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Presets Rápidos
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { onTransitionSoundIdsChange("1, 2, 3, 4") },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cliques Tecla (1-4)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    FilledTonalButton(
+                        onClick = { onTransitionSoundIdsChange("5, 6, 7, 8, 9, 10, 11, 12") },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Efeitos Rápidos (5-12)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    FilledTonalButton(
+                        onClick = { onTransitionSoundIdsChange("0") },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(0.7f)
+                    ) {
+                        Text("Sem Som (0)", fontSize = 10.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = "Catálogo de Sons (Toque para ouvir):",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            availableSounds.forEach { sound ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF161E2C),
+                    border = BorderStroke(1.dp, Color(0xFF28344A)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPlaySoundTest(sound) }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF1E283C)
+                            ) {
+                                Text(
+                                    text = "ID ${sound.id}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF00E5FF),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = sound.name,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = sound.description,
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { onPlaySoundTest(sound) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Ouvir som",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

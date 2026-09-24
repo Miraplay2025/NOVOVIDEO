@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "AppAnimador"
+rootProject.name = "Editor Automático"
 
 include(":app")

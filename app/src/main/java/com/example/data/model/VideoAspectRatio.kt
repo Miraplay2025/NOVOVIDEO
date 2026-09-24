@@ -1,11 +1,14 @@
 package com.example.data.model
 
 /**
- * Proporções de Tela (Aspect Ratio) suportadas:
+ * Proporções de Tela (Aspect Ratio) suportadas com rolagem horizontal:
  * - 16:9 (Paisagem / Widescreen / YouTube / TV)
  * - 9:16 (Vertical / Stories / TikTok / Reels)
  * - 1:1 (Quadrado / Feed Instagram)
  * - 4:5 (Retrato Vertical / Feed Instagram Portrait)
+ * - 21:9 (Cinema Ultra-Widescreen)
+ * - 4:3 (Formato Clássico)
+ * - 3:4 (Retrato Clássico)
  */
 enum class VideoAspectRatio(
     val label: String,
@@ -41,6 +44,27 @@ enum class VideoAspectRatio(
         subtitle = "Retrato Vertical (Feed)",
         widthRatio = 4,
         heightRatio = 5
+    ),
+    RATIO_21_9(
+        label = "21:9",
+        ratio = 21f / 9f,
+        subtitle = "Cinema Ultra-Wide",
+        widthRatio = 21,
+        heightRatio = 9
+    ),
+    RATIO_4_3(
+        label = "4:3",
+        ratio = 4f / 3f,
+        subtitle = "Clássico Paisagem",
+        widthRatio = 4,
+        heightRatio = 3
+    ),
+    RATIO_3_4(
+        label = "3:4",
+        ratio = 3f / 4f,
+        subtitle = "Clássico Retrato",
+        widthRatio = 3,
+        heightRatio = 4
     );
 
     /**
@@ -75,6 +99,21 @@ enum class VideoAspectRatio(
                 val w = makeEven((h * 4f / 5f).toInt())
                 Pair(w, h)
             }
+            RATIO_21_9 -> {
+                val h = baseDim
+                val w = makeEven((h * 21f / 9f).toInt())
+                Pair(w, h)
+            }
+            RATIO_4_3 -> {
+                val h = baseDim
+                val w = makeEven((h * 4f / 3f).toInt())
+                Pair(w, h)
+            }
+            RATIO_3_4 -> {
+                val w = baseDim
+                val h = makeEven((w * 4f / 3f).toInt())
+                Pair(w, h)
+            }
         }
     }
 
@@ -84,12 +123,17 @@ enum class VideoAspectRatio(
     }
 
     companion object {
-        val ALL: List<VideoAspectRatio> = listOf(RATIO_16_9, RATIO_9_16, RATIO_1_1, RATIO_4_5)
+        val ALL: List<VideoAspectRatio> = listOf(
+            RATIO_16_9,
+            RATIO_9_16,
+            RATIO_1_1,
+            RATIO_4_5,
+            RATIO_21_9,
+            RATIO_4_3,
+            RATIO_3_4
+        )
         val DEFAULT: VideoAspectRatio = RATIO_16_9
 
-        /**
-         * Detecta a proporção mais próxima para uma imagem com base em largura e altura.
-         */
         fun detectFromDimensions(width: Int, height: Int): VideoAspectRatio {
             if (width <= 0 || height <= 0) return DEFAULT
             val imgRatio = width.toFloat() / height.toFloat()

@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -10,9 +11,13 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import com.example.engine.MediaHelper
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,10 +38,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,11 +52,17 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,23 +109,36 @@ fun LivePreviewStage(
     onTogglePlay: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "live_motion")
+    val animProgress = remember { Animatable(0f) }
+    var isAnimationFinished by remember { mutableStateOf(false) }
+    var replayTrigger by remember { mutableIntStateOf(0) }
 
-    // Progresso contínuo de animação
-    val animatedProgress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (isPreviewingTransition) 2200 else 3500,
-                easing = if (isPreviewingTransition) FastOutSlowInEasing else LinearEasing
-            ),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "stage_progress"
-    )
+    // Duração do percurso completo do início ao fim
+    val animationDuration = if (isPreviewingTransition) 2200 else 3200
 
-    val currentProgress = if (isPlaying) animatedProgress else 0.5f
+    LaunchedEffect(
+        selectedMovement.id,
+        selectedTransition.id,
+        isPreviewingTransition,
+        currentImageIndex,
+        replayTrigger,
+        isPlaying
+    ) {
+        if (isPlaying) {
+            isAnimationFinished = false
+            animProgress.snapTo(0f) // Inicia no ponto 0.0f
+            animProgress.animateTo(
+                targetValue = 1f, // Executa até terminar completamente (1.0f)
+                animationSpec = tween(
+                    durationMillis = animationDuration,
+                    easing = if (isPreviewingTransition) FastOutSlowInEasing else LinearEasing
+                )
+            )
+            isAnimationFinished = true // Conclui e encerra o movimento ou a transição
+        }
+    }
+
+    val currentProgress = animProgress.value
 
     val currentImage = images.getOrNull(currentImageIndex)
     val nextImage = if (images.size >= 2) {
@@ -134,7 +160,7 @@ fun LivePreviewStage(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // Cabeçalho: Título + Modo de Pré-visualização + Botão Play
+            // Cabeçalho: Título + Modo de Pré-visualização + Botão Play/Replay
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -198,12 +224,26 @@ fun LivePreviewStage(
                     }
 
                     FilledTonalIconButton(
-                        onClick = onTogglePlay,
+                        onClick = {
+                            if (isAnimationFinished) {
+                                replayTrigger++
+                            } else {
+                                onTogglePlay()
+                            }
+                        },
                         modifier = Modifier.testTag("toggle_preview_play")
                     ) {
                         Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pausar" else "Reproduzir"
+                            imageVector = when {
+                                isAnimationFinished -> Icons.Default.Replay
+                                isPlaying -> Icons.Default.Pause
+                                else -> Icons.Default.PlayArrow
+                            },
+                            contentDescription = when {
+                                isAnimationFinished -> "Reiniciar Pré-visualização"
+                                isPlaying -> "Pausar"
+                                else -> "Reproduzir"
+                            }
                         )
                     }
                 }
@@ -211,9 +251,11 @@ fun LivePreviewStage(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Seletor de 4 Proporções de Tela (16:9, 9:16, 1:1, 4:5)
+            // Seletor de Proporções de Tela Rolável Horizontalmente
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -253,64 +295,93 @@ fun LivePreviewStage(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Área do Visualizador de Vídeo com Moldura Decorativa Bonita
+            // Área do Visualizador de Vídeo com Contêiner Estritamente na Proporção Selecionada
+            val isCurrentVideo = currentImage != null && MediaHelper.isVideo(currentImage.filePath)
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 230.dp, max = 340.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .shadow(elevation = 6.dp, shape = RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0D0F12))
-                    .border(
-                        border = androidx.compose.foundation.BorderStroke(
-                            2.dp,
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-                                    Color(0xFF3B82F6),
-                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.8f)
-                                )
-                            )
-                        ),
-                        shape = RoundedCornerShape(16.dp)
-                    ),
+                    .padding(vertical = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Conteúdo da Imagem ajustado à Proporção Escolhida
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black),
+                        .fillMaxWidth(if (selectedAspectRatio.ratio < 0.9f) 0.65f else if (selectedAspectRatio.ratio < 1.1f) 0.85f else 1.0f)
+                        .aspectRatio(selectedAspectRatio.ratio)
+                        .heightIn(max = 360.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .shadow(elevation = 6.dp, shape = RoundedCornerShape(16.dp))
+                        .background(Color(0xFF0D0F12))
+                        .border(
+                            border = androidx.compose.foundation.BorderStroke(
+                                2.dp,
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                                        Color(0xFF3B82F6),
+                                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f)
+                                    )
+                                )
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (currentImage != null) {
-                        if (isPreviewingTransition && nextImage != null) {
-                            // Renderiza a transição em tempo real entre imagem 1 e 2
-                            PreviewTransitionEffectView(
-                                image1 = currentImage,
-                                image2 = nextImage,
-                                transition = selectedTransition,
-                                progress = currentProgress
-                            )
-                        } else {
-                            // Renderiza a imagem atual com o movimento de câmera
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(File(currentImage.filePath))
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = "Pré-visualização da Imagem ${currentImageIndex + 1}",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        selectedMovement.applyToGraphicsLayer(this, currentProgress)
+                    // Conteúdo da Imagem ou Vídeo ajustado à Proporção Escolhida
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (currentImage != null) {
+                            if (isPreviewingTransition && nextImage != null) {
+                                // Renderiza a transição em tempo real entre imagem 1 e 2
+                                PreviewTransitionEffectView(
+                                    image1 = currentImage,
+                                    image2 = nextImage,
+                                    transition = selectedTransition,
+                                    progress = currentProgress
+                                )
+                            } else {
+                                // Renderiza imagem ou vídeo atual (vídeos não suportam animação de movimento)
+                                AsyncImage(
+                                    model = ImageRequest.Builder(LocalContext.current)
+                                        .data(File(currentImage.filePath))
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = "Pré-visualização da Mídia ${currentImageIndex + 1}",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            if (!isCurrentVideo) {
+                                                selectedMovement.applyToGraphicsLayer(this, currentProgress)
+                                            }
+                                        }
+                                )
+
+                                if (isCurrentVideo) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color.Black.copy(alpha = 0.65f),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "VÍDEO (Sem movimento de câmera)",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
                                     }
-                            )
-                        }
-                    } else {
+                                }
+                            }
+                        } else {
                         // Estado sem imagem
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -424,7 +495,43 @@ fun LivePreviewStage(
                     ) {}
                 }
 
-                // Rótulo Flutuante Inferior com a ação atual
+                // Botão Central de Repetir quando o movimento ou transição termina
+                if (isAnimationFinished) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.65f),
+                        border = BorderStroke(1.5.dp, Color(0xFF00E5FF)),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .clickable { replayTrigger++ }
+                            .testTag("preview_replay_center_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Replay,
+                                contentDescription = "Repetir",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Linha de Progresso do Movimento / Transição (Inicia no 0% e Termina no 100%)
+                LinearProgressIndicator(
+                    progress = { currentProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .align(Alignment.BottomCenter),
+                    color = if (isAnimationFinished) Color(0xFF10B981) else Color(0xFF00E5FF),
+                    trackColor = Color.White.copy(alpha = 0.20f)
+                )
+
+                // Rótulo Flutuante Inferior com status de execução/conclusão
                 Surface(
                     shape = RoundedCornerShape(6.dp),
                     color = Color.Black.copy(alpha = 0.75f),
@@ -437,17 +544,31 @@ fun LivePreviewStage(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (isPreviewingTransition) Icons.Default.AutoAwesome else Icons.Default.Animation,
+                            imageVector = when {
+                                isAnimationFinished -> Icons.Default.CheckCircle
+                                isPreviewingTransition -> Icons.Default.AutoAwesome
+                                else -> Icons.Default.Animation
+                            },
                             contentDescription = null,
-                            tint = if (isPreviewingTransition) Color(0xFFFBBF24) else Color(0xFF60A5FA),
+                            tint = when {
+                                isAnimationFinished -> Color(0xFF10B981)
+                                isPreviewingTransition -> Color(0xFFFBBF24)
+                                else -> Color(0xFF60A5FA)
+                            },
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isPreviewingTransition)
-                                "Efeito: ${selectedTransition.name} • ${selectedTransition.category}"
-                            else
-                                "Câmera: ${selectedMovement.description}",
+                            text = when {
+                                isAnimationFinished -> if (isPreviewingTransition)
+                                    "Transição Concluída (100%) • Toque para repetir"
+                                else
+                                    "Movimento Concluído (100%) • Toque para repetir"
+                                isPreviewingTransition ->
+                                    "Transição: #${selectedTransition.id} ${selectedTransition.name} (${(currentProgress * 100).toInt()}%)"
+                                else ->
+                                    "Câmera: #${selectedMovement.id} ${selectedMovement.name} (${(currentProgress * 100).toInt()}%)"
+                            },
                             color = Color.White,
                             fontSize = 10.sp,
                             maxLines = 1
@@ -457,6 +578,7 @@ fun LivePreviewStage(
             }
         }
     }
+}
 }
 
 /**

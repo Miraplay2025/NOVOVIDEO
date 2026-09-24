@@ -51,6 +51,10 @@ class ProjectRepository(
         projectDao.getImagesForProjectSync(projectId)
     }
 
+    suspend fun getFirstMediaSync(projectId: Long): ProjectImage? = withContext(Dispatchers.IO) {
+        projectDao.getFirstMediaForProjectSync(projectId)
+    }
+
     suspend fun addImages(projectId: Long, imagePairs: List<Pair<String, String>>) = withContext(Dispatchers.IO) {
         val currentImages = projectDao.getImagesForProjectSync(projectId)
         var nextOrder = currentImages.size + 1

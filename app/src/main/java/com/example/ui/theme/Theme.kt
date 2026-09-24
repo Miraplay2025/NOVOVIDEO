@@ -8,45 +8,74 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme =
-  darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
+private val StudioDarkColorScheme = darkColorScheme(
+    primary = CyanNeon,
+    onPrimary = Color(0xFF00222B),
+    primaryContainer = Color(0xFF003644),
+    onPrimaryContainer = Color(0xFF8CEEFF),
 
-private val LightColorScheme =
-  lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
+    secondary = ElectricViolet,
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFF321B66),
+    onSecondaryContainer = Color(0xFFD6C6FF),
 
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    tertiary = AmberGold,
+    onTertiary = Color(0xFF261900),
+    tertiaryContainer = Color(0xFF473100),
+    onTertiaryContainer = Color(0xFFFFDF9E),
+
+    background = StudioBackground,
+    onBackground = DarkTextPrimary,
+    surface = StudioSurface,
+    onSurface = DarkTextPrimary,
+    surfaceVariant = StudioSurfaceVariant,
+    onSurfaceVariant = DarkTextSecondary,
+    outline = StudioSurfaceBorder,
+
+    error = DangerRed,
+    onError = Color.White
+)
+
+private val StudioLightColorScheme = lightColorScheme(
+    primary = CyanAccent,
     onPrimary = Color.White,
+    primaryContainer = Color(0xFFE0F7FA),
+    onPrimaryContainer = Color(0xFF004D5A),
+
+    secondary = ElectricViolet,
     onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-  )
+    secondaryContainer = Color(0xFFEDE7F6),
+    onSecondaryContainer = Color(0xFF311B92),
+
+    tertiary = AmberGold,
+    onTertiary = Color.Black,
+
+    background = Color(0xFFF8FAFC),
+    onBackground = Color(0xFF0F172A),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF0F172A),
+    surfaceVariant = Color(0xFFF1F5F9),
+    onSurfaceVariant = Color(0xFF475569),
+    outline = Color(0xFFCBD5E1),
+
+    error = DangerRed,
+    onError = Color.White
+)
 
 @Composable
 fun MyApplicationTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  // Dynamic color is available on Android 12+
-  dynamicColor: Boolean = true,
-  content: @Composable () -> Unit,
+    darkTheme: Boolean = true, // Editor visual prioritiza o tema de estúdio escuro profissional
+    dynamicColor: Boolean = false, // Mantém a identidade visual consistente de estúdio
+    content: @Composable () -> Unit,
 ) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
+    val colorScheme = if (darkTheme) StudioDarkColorScheme else StudioLightColorScheme
 
-      darkTheme -> DarkColorScheme
-      else -> LightColorScheme
-    }
-
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
 }

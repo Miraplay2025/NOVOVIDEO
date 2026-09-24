@@ -12,6 +12,7 @@ import com.example.data.model.MovementEffect
 import com.example.data.model.Project
 import com.example.data.model.ProjectImage
 import com.example.data.model.TransitionEffect
+import com.example.data.model.TransitionSoundEffect
 import com.example.data.model.VideoAspectRatio
 import com.example.data.model.VideoBitratePreset
 import com.example.data.model.VideoFps
@@ -19,11 +20,14 @@ import com.example.data.model.VideoResolution
 import com.example.data.repository.ProjectRepository
 import com.example.engine.ImageImportHelper
 import com.example.engine.ImageImportResult
+import com.example.engine.MediaHelper
 import com.example.engine.RandomPromptResult
 import com.example.engine.RenderingManager
 import com.example.engine.RenderingState
 import com.example.engine.SyntaxParseResult
 import com.example.engine.SyntaxParser
+import com.example.engine.TransitionSoundEngine
+import com.example.engine.TransitionSoundValidationResult
 import com.example.engine.TransitionValidationResult
 import com.example.engine.ZipExtractResult
 import com.example.engine.ZipExtractor
@@ -31,11 +35,9 @@ import com.example.service.VideoRenderingService
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -76,7 +78,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedBitrateMbps = MutableStateFlow(VideoBitratePreset.DEFAULT.mbps)
     val selectedBitrateMbps: StateFlow<Float> = _selectedBitrateMbps.asStateFlow()
 
-    // Transições Suaves CapCut (Requisito 2 e 3)
+    // Transições Suaves CapCut (20 transições + 0 Sem Transição)
     private val _selectedTransition = MutableStateFlow(TransitionEffect.DEFAULT)
     val selectedTransition: StateFlow<TransitionEffect> = _selectedTransition.asStateFlow()
 
@@ -85,6 +87,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _transitionError = MutableStateFlow<String?>(null)
     val transitionError: StateFlow<String?> = _transitionError.asStateFlow()
+
+    // Sons de Transições Rápidas (12 sons profissionais + 4 cliques + custom + 0 Sem Som)
+    private val _allAvailableSounds = MutableStateFlow<List<TransitionSoundEffect>>(TransitionSoundEffect.BUILT_IN_SOUNDS)
+    val allAvailableSounds: StateFlow<List<TransitionSoundEffect>> = _allAvailableSounds.asStateFlow()
+
+    private val _selectedSound = MutableStateFlow(TransitionSoundEffect.DEFAULT)
+    val selectedSound: StateFlow<TransitionSoundEffect> = _selectedSound.asStateFlow()
+
+    private val _transitionSoundIdsText = MutableStateFlow("1, 2, 3, 5")
+    val transitionSoundIdsText: StateFlow<String> = _transitionSoundIdsText.asStateFlow()
+
+    private val _transitionSoundError = MutableStateFlow<String?>(null)
+    val transitionSoundError: StateFlow<String?> = _transitionSoundError.asStateFlow()
 
     private val _isPreviewingTransition = MutableStateFlow(false)
     val isPreviewingTransition: StateFlow<Boolean> = _isPreviewingTransition.asStateFlow()
@@ -112,6 +127,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     val renderingState: StateFlow<RenderingState> = RenderingManager.state
 
+    init {
+        TransitionSoundEngine.init(application)
+        viewModelScope.launch {
+            TransitionSoundEngine.customSounds.collect { customList ->
+                _allAvailableSounds.value = TransitionSoundEffect.BUILT_IN_SOUNDS + customList
+            }
+        }
+    }
+
     fun initProject(projectId: Long) {
         if (currentProjectId == projectId) return
         currentProjectId = projectId
@@ -132,7 +156,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 if (_currentImageIndex.value >= imgList.size) {
                     _currentImageIndex.value = (imgList.size - 1).coerceAtLeast(0)
                 }
-                // Detecta a proporção da primeira imagem como padrão inicial (Requisito 5)
+                // Detecta a proporção da primeira imagem como padrão inicial
                 if (imgList.isNotEmpty()) {
                     try {
                         val firstFile = File(imgList[0].filePath)
@@ -148,7 +172,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 // Se o texto de sintaxe estiver vazio, inicializa com template automático
                 if (_syntaxText.value.isBlank() && imgList.isNotEmpty()) {
-                    val defaultText = SyntaxParser.generateDefaultSyntax(imgList.size, _selectedMovement.value.id)
+                    val defaultText = SyntaxParser.generateDefaultSyntax(
+                        totalImages = imgList.size,
+                        defaultMovementId = _selectedMovement.value.id,
+                        videoMediaIndices = getVideoMediaIndices()
+                    )
                     _syntaxText.value = defaultText
                     repository.updateProjectSyntax(projectId, defaultText)
                 }
@@ -204,6 +232,56 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // Sons de Transições
+    fun selectSound(sound: TransitionSoundEffect) {
+        _selectedSound.value = sound
+        TransitionSoundEngine.playSound(getApplication(), sound)
+    }
+
+    fun playSoundTest(sound: TransitionSoundEffect) {
+        TransitionSoundEngine.playSound(getApplication(), sound)
+    }
+
+    fun updateTransitionSoundIdsText(newText: String) {
+        _transitionSoundIdsText.value = newText
+        val availableIds = _allAvailableSounds.value.map { it.id }.toSet()
+        when (val result = SyntaxParser.validateTransitionSoundIds(newText, availableIds)) {
+            is TransitionSoundValidationResult.Success -> {
+                _transitionSoundError.value = null
+                val firstId = result.soundIds.firstOrNull() ?: 1
+                val matched = _allAvailableSounds.value.find { it.id == firstId } ?: TransitionSoundEffect.DEFAULT
+                _selectedSound.value = matched
+            }
+            is TransitionSoundValidationResult.Error -> {
+                _transitionSoundError.value = result.message
+            }
+        }
+    }
+
+    fun uploadCustomSound(uri: Uri) {
+        viewModelScope.launch {
+            val result = TransitionSoundEngine.importCustomSound(getApplication(), uri)
+            result.onSuccess { newSound ->
+                _selectedSound.value = newSound
+                _messageEvents.emit("Som personalizado '${newSound.name}' adicionado com sucesso (ID ${newSound.id})!")
+            }.onFailure { e ->
+                _messageEvents.emit("Erro ao importar som de áudio: ${e.message}")
+            }
+        }
+    }
+
+    fun deleteCustomSound(soundId: Int) {
+        viewModelScope.launch {
+            val success = TransitionSoundEngine.deleteCustomSound(getApplication(), soundId)
+            if (success) {
+                if (_selectedSound.value.id == soundId) {
+                    _selectedSound.value = TransitionSoundEffect.DEFAULT
+                }
+                _messageEvents.emit("Som de transição excluído com sucesso.")
+            }
+        }
+    }
+
     fun togglePreviewMode() {
         _isPreviewingTransition.value = !_isPreviewingTransition.value
     }
@@ -228,26 +306,37 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val count = _images.value.size
         if (count == 0) {
             viewModelScope.launch {
-                _messageEvents.emit("Importe fotos antes de gerar os prompts automáticos.")
+                _messageEvents.emit("Importe mídias antes de gerar os prompts automáticos.")
             }
             return
         }
 
-        val result = SyntaxParser.generateRandomPrompts(count)
+        val availableSoundIds = _allAvailableSounds.value.filter { it.id > 0 }.map { it.id }
+        val result = SyntaxParser.generateRandomPrompts(
+            totalImages = count,
+            videoMediaIndices = getVideoMediaIndices(),
+            availableSoundIds = availableSoundIds
+        )
         _syntaxText.value = result.movementSyntaxText
         _transitionIdsText.value = result.transitionIdsText
+        _transitionSoundIdsText.value = result.transitionSoundIdsText
         _syntaxError.value = null
         _transitionError.value = null
+        _transitionSoundError.value = null
 
         viewModelScope.launch {
             repository.updateProjectSyntax(currentProjectId, result.movementSyntaxText)
-            _messageEvents.emit("Prompts automáticos gerados com movimentos (0-26), durações (5-10s) e transições (0-20)!")
+            _messageEvents.emit("Prompts automáticos gerados com movimentos (0-26), durações (5-10s), transições (0-20) e sons!")
         }
     }
 
     fun openMasterConfig() {
         if (_syntaxText.value.isBlank() && _images.value.isNotEmpty()) {
-            _syntaxText.value = SyntaxParser.generateDefaultSyntax(_images.value.size, _selectedMovement.value.id)
+            _syntaxText.value = SyntaxParser.generateDefaultSyntax(
+                totalImages = _images.value.size,
+                defaultMovementId = _selectedMovement.value.id,
+                videoMediaIndices = getVideoMediaIndices()
+            )
         }
         _isMasterConfigOpen.value = true
     }
@@ -261,9 +350,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openSyntaxModal() {
-        // Se estiver vazio e houver imagens, pré-carrega sugestão
         if (_syntaxText.value.isBlank() && _images.value.isNotEmpty()) {
-            _syntaxText.value = SyntaxParser.generateDefaultSyntax(_images.value.size, _selectedMovement.value.id)
+            _syntaxText.value = SyntaxParser.generateDefaultSyntax(
+                totalImages = _images.value.size,
+                defaultMovementId = _selectedMovement.value.id,
+                videoMediaIndices = getVideoMediaIndices()
+            )
         }
         _syntaxError.value = null
         _isSyntaxModalOpen.value = true
@@ -285,18 +377,26 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             _syntaxError.value = "Importe imagens para o projeto antes de gerar a sintaxe."
             return
         }
-        val generated = SyntaxParser.generateDefaultSyntax(count, _selectedMovement.value.id)
+        val generated = SyntaxParser.generateDefaultSyntax(
+            totalImages = count,
+            defaultMovementId = _selectedMovement.value.id,
+            videoMediaIndices = getVideoMediaIndices()
+        )
         _syntaxText.value = generated
         _syntaxError.value = null
         viewModelScope.launch {
             repository.updateProjectSyntax(currentProjectId, generated)
-            _messageEvents.emit("Sintaxe automática gerada para $count imagens.")
+            _messageEvents.emit("Sintaxe automática gerada para $count mídias.")
         }
     }
 
     fun validateAndSaveSyntax(): Boolean {
         val totalImages = _images.value.size
-        when (val result = SyntaxParser.parseAndValidate(_syntaxText.value, totalImages)) {
+        when (val result = SyntaxParser.parseAndValidate(
+            text = _syntaxText.value,
+            totalProjectImages = totalImages,
+            videoMediaIndices = getVideoMediaIndices()
+        )) {
             is SyntaxParseResult.Success -> {
                 _syntaxError.value = null
                 viewModelScope.launch {
@@ -318,7 +418,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             when (val result = ImageImportHelper.importImages(context, uris, currentProjectId)) {
                 is ImageImportResult.Success -> {
                     repository.addImages(currentProjectId, result.imported)
-                    _messageEvents.emit("${result.imported.size} imagem(ns) adicionada(s) com sucesso.")
+                    _messageEvents.emit("${result.imported.size} mídia(s) adicionada(s) com sucesso.")
                     refreshDefaultSyntaxIfNeeded()
                 }
                 is ImageImportResult.Error -> {
@@ -333,7 +433,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             when (val result = ZipExtractor.extractZip(context, zipUri, currentProjectId)) {
                 is ZipExtractResult.Success -> {
                     repository.addImages(currentProjectId, result.extractedFiles)
-                    _messageEvents.emit("${result.extractedFiles.size} imagens extraídas do ZIP com sucesso.")
+                    _messageEvents.emit("${result.extractedFiles.size} mídias extraídas do ZIP com sucesso.")
                     refreshDefaultSyntaxIfNeeded()
                 }
                 is ZipExtractResult.Error -> {
@@ -346,7 +446,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun refreshDefaultSyntaxIfNeeded() {
         val updatedImages = repository.getImagesSync(currentProjectId)
         if (updatedImages.isNotEmpty()) {
-            val defaultText = SyntaxParser.generateDefaultSyntax(updatedImages.size, _selectedMovement.value.id)
+            val videoIndices = updatedImages.mapIndexedNotNull { index, img ->
+                if (MediaHelper.isVideo(img.filePath)) index + 1 else null
+            }.toSet()
+            val defaultText = SyntaxParser.generateDefaultSyntax(
+                totalImages = updatedImages.size,
+                defaultMovementId = _selectedMovement.value.id,
+                videoMediaIndices = videoIndices
+            )
             _syntaxText.value = defaultText
             repository.updateProjectSyntax(currentProjectId, defaultText)
         }
@@ -355,10 +462,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun deleteImage(imageId: Long) {
         viewModelScope.launch {
             repository.deleteImage(currentProjectId, imageId)
-            _messageEvents.emit("Imagem excluída com sucesso.")
+            _messageEvents.emit("Mídia excluída com sucesso.")
             val remaining = repository.getImagesSync(currentProjectId)
             if (remaining.isNotEmpty()) {
-                val updatedSyntax = SyntaxParser.generateDefaultSyntax(remaining.size, _selectedMovement.value.id)
+                val videoIndices = remaining.mapIndexedNotNull { index, img ->
+                    if (MediaHelper.isVideo(img.filePath)) index + 1 else null
+                }.toSet()
+                val updatedSyntax = SyntaxParser.generateDefaultSyntax(
+                    totalImages = remaining.size,
+                    defaultMovementId = _selectedMovement.value.id,
+                    videoMediaIndices = videoIndices
+                )
                 _syntaxText.value = updatedSyntax
                 repository.updateProjectSyntax(currentProjectId, updatedSyntax)
             } else {
@@ -383,23 +497,31 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val totalImages = _images.value.size
         if (totalImages == 0) {
             viewModelScope.launch {
-                _messageEvents.emit("Nenhuma imagem importada. Adicione imagens antes de iniciar.")
+                _messageEvents.emit("Nenhuma mídia importada. Adicione fotos ou vídeos antes de iniciar.")
             }
             return
         }
 
         // Se o texto de sintaxe estiver vazio, gera automático
         if (_syntaxText.value.isBlank()) {
-            _syntaxText.value = SyntaxParser.generateDefaultSyntax(totalImages, _selectedMovement.value.id)
+            _syntaxText.value = SyntaxParser.generateDefaultSyntax(
+                totalImages = totalImages,
+                defaultMovementId = _selectedMovement.value.id,
+                videoMediaIndices = getVideoMediaIndices()
+            )
         }
 
-        // Valida sintaxe antes de iniciar
-        val parseResult = SyntaxParser.parseAndValidate(_syntaxText.value, totalImages)
+        // Valida sintaxe antes de iniciar (incluindo validação de vídeo estático MOVIMENTO 0)
+        val parseResult = SyntaxParser.parseAndValidate(
+            text = _syntaxText.value,
+            totalProjectImages = totalImages,
+            videoMediaIndices = getVideoMediaIndices()
+        )
         if (parseResult is SyntaxParseResult.Error) {
             _syntaxError.value = parseResult.message
             _isSyntaxModalOpen.value = true
             viewModelScope.launch {
-                _messageEvents.emit("Erro na validação da sintaxe. Verifique as configurações.")
+                _messageEvents.emit("Erro na sintaxe: ${parseResult.message}")
             }
             return
         }
@@ -412,6 +534,20 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 _transitionError.value = transValidation.message
                 viewModelScope.launch {
                     _messageEvents.emit("Aviso: Transição inválida (${transValidation.message}). Usando padrão ID 1.")
+                }
+                listOf(1)
+            }
+        }
+
+        // Valida os IDs de sons de transição
+        val availableSoundIds = _allAvailableSounds.value.map { it.id }.toSet()
+        val soundValidation = SyntaxParser.validateTransitionSoundIds(_transitionSoundIdsText.value, availableSoundIds)
+        val transitionSoundIds = when (soundValidation) {
+            is TransitionSoundValidationResult.Success -> soundValidation.soundIds
+            is TransitionSoundValidationResult.Error -> {
+                _transitionSoundError.value = soundValidation.message
+                viewModelScope.launch {
+                    _messageEvents.emit("Aviso no som: ${soundValidation.message}. Usando som padrão.")
                 }
                 listOf(1)
             }
@@ -430,7 +566,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
         val effectiveDir = _project.value?.customOutputDirUri ?: appPreferences.getDefaultOutputDirUri()
 
-        // Dispara Foreground Service com parâmetros rigorosamente configurados para exportação unificada
+        // Dispara Foreground Service com parâmetros configurados para exportação unificada
         VideoRenderingService.start(
             context = context,
             projectId = currentProjectId,
@@ -441,7 +577,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             videoFps = fps,
             videoBitrateBps = bitrateBps,
             resolutionLabel = "${resolution.label} • ${aspectRatio.label} (${finalWidth}x${finalHeight})",
-            transitionIds = transitionIds
+            transitionIds = transitionIds,
+            transitionSoundIds = transitionSoundIds
         )
     }
 
@@ -455,5 +592,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun reopenProgressModal() {
         _isProgressModalOpen.value = true
+    }
+
+    private fun getVideoMediaIndices(): Set<Int> {
+        return _images.value.mapIndexedNotNull { index, img ->
+            if (MediaHelper.isVideo(img.filePath)) index + 1 else null
+        }.toSet()
     }
 }
